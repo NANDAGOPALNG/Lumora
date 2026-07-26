@@ -1,9 +1,14 @@
 from fastapi import FastAPI
+from app.config.settings import Settings
+
+# Load settings and configure logging
+settings = Settings.get_instance()
+settings.configure_logging()
 
 app = FastAPI(
-    title="Lumora API",
-    version="1.0.0",
-    description="Enterprise AI Knowledge Platform"
+    title=settings.app_name,
+    version=settings.app_version,
+    description=settings.app_description,
 )
 
 @app.get("/")
@@ -13,5 +18,7 @@ def root():
 @app.get("/health")
 def health():
     return {
-        "status": "healthy"
+        "status": "healthy",
+        "environment": settings.environment.value,
+        "app_name": settings.app_name
     }

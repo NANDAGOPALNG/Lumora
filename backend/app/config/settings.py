@@ -1,0 +1,68 @@
+from pydantic_settings import BaseSettings
+from typing import Optional
+from enum import Enum
+
+class Environment(str, Enum):
+    DEVELOPMENT = "development"
+    STAGING = "staging"
+    PRODUCTION = "production"
+
+class Settings(BaseSettings):
+    app_name: str = "Lumora API"
+    app_version: str = "1.0.0"
+    app_description: str = "Enterprise AI Knowledge Platform"
+
+    # Server configuration
+    host: str = "0.0.0.0"
+    port: int = 8000
+
+    # Security
+    secret_key: str
+    algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+
+    # Database
+    database_url: Optional[str] = None
+
+    # External services
+    openai_api_key: Optional[str] = None
+    pinecone_api_key: Optional[str] = None
+    chromadb_path: Optional[str] = None
+
+    # Environment
+    environment: Environment = Environment.DEVELOPMENT
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+        "case_sensitive": True,
+    }
+
+    def get_database_url(self) -> Optional[str]:
+        if self.database_url:
+            return self.database_url
+        elif self.environment != Environment.PRODUCTION:
+            return f"sqlite+aiosqlite:///./lumora_{self.environment}.db"
+        else:
+            raise ValueError("DATABASE_URL must be set in production")
+
+    def is_production(self) -> bool:
+        return self.environment == Environment.PRODUCTION
+
+    def is_development(self) -> bool:
+        return self.environment == Environment.DEVELOPMENT
+
+    def configure_logging(self) -> None:
+        import logging
+
+        if self.is_production():
+            logging.basicConfig(level=logging.WARNING)
+        elif self.is_development():
+            logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        else:
+            logging.basicConfig(level=logging.DEBUG)
+
+    @classmethod
+    def get_instance(cls) -> "Settings":
+        return cls()
