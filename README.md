@@ -86,7 +86,7 @@ Lumora/
 - [x] API Specification
 - [x] FastAPI project scaffold + settings/config module
 - [x] Base SQLAlchemy models (`User`, `Workspace`, `Document`)
-- [ ] **⏳ Currently in progress:** Alembic migrations, async DB session wiring, remaining schema (conversations, chunks/embeddings metadata, connector state)
+- [x] Currently in progress:** Alembic migrations, async DB session wiring, remaining schema (conversations, chunks/embeddings metadata, connector state)
 - [ ] Document upload + processing pipeline
 - [ ] Embedding generation + Qdrant integration
 - [ ] Retrieval pipeline (hybrid search + reranking)
