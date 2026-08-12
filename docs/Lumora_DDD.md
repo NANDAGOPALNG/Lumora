@@ -28,6 +28,8 @@ Lumora uses a hybrid database architecture consisting of PostgreSQL for relation
 - PostgreSQL: Users, Workspaces, Documents, Conversations, Messages, Connectors
 - Qdrant: Document and chunk embeddings with vector indexes
 
+![Database Architecture](https://github.com/NANDAGOPALNG/Lumora/blob/main/docs/diagrams/DDD%20Database%20Architecture.drawio.png)
+
 ## 3. Database Selection
 ### PostgreSQL
 - ACID compliant
