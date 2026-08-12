@@ -1,166 +1,96 @@
-Lumora API Specification
-I would structure it like this:
-01. Introduction
+# Lumora API Specification
 
-02. Authentication
-
-03. Base URL
-
-04. Authentication Method
-
-05. Error Response Format
-
-06. Authentication APIs
-
-07. Workspace APIs
-
-08. Document APIs
-
-09. Chat APIs
-
+## Table of Contents
+1. Introduction
+2. Authentication
+3. Base URL
+4. Authentication Method
+5. Error Response Format
+6. Authentication APIs
+7. Workspace APIs
+8. Document APIs
+9. Chat APIs
 10. Search APIs
-
 11. Connector APIs
-
 12. Health APIs
-
 13. Response Models
-
 14. Status Codes
-
 15. Rate Limits
-
 16. API Versioning
 
-Every endpoint will follow the same format
-For example:
-POST /api/v1/auth/google
-Purpose
-Authenticate user using Google OAuth.
-Request
-{
-  "google_token": "..."
-}
-Success Response
-{
-  "access_token": "...",
-  "user": {
-    "id": "...",
-    "name": "...",
-    "email": "..."
-  }
-}
-Status Codes
-200 OK
+## Introduction
+Defines the REST APIs for KnowledgeOS.
 
-401 Unauthorized
+## Base URL
+`/api/v1`
 
-500 Internal Server Error
+## Authentication Method
+Google OAuth with JWT Bearer tokens.
 
-We'll do this for every API.
+## Error Response Format
+```json
+{"success":false,"error":{"code":"ERROR_CODE","message":"Description"}}
+```
 
-APIs we'll define
-Authentication
-POST /auth/google
+## Authentication APIs
+### POST /auth/google
+Request:
+```json
+{"google_token":"..."}
+```
+Response:
+```json
+{"access_token":"...","user":{"id":"...","name":"...","email":"..."}}
+```
+Status: 200, 401, 500
 
-GET /auth/me
+### GET /auth/me
+Returns current user.
 
-POST /auth/logout
+### POST /auth/logout
+Logs out current user.
 
-Workspace
-GET /workspaces
+## Workspace APIs
+- GET /workspaces
+- POST /workspaces
+- PATCH /workspaces/{id}
+- DELETE /workspaces/{id}
 
-POST /workspaces
+## Document APIs
+- POST /documents/upload
+- GET /documents
+- GET /documents/{id}
+- DELETE /documents/{id}
+- POST /documents/{id}/reindex
 
-PATCH /workspaces/{id}
+## Chat APIs
+- POST /chat
+- GET /chat/history
+- DELETE /chat/{id}
 
-DELETE /workspaces/{id}
+## Search APIs
+- POST /search
+- GET /search/suggestions
 
-Documents
-POST /documents/upload
+## Connector APIs
+- POST /connectors/github
+- POST /connectors/google-drive
+- POST /connectors/notion
+- GET /connectors
+- DELETE /connectors/{id}
 
-GET /documents
+## Health APIs
+- GET /health
+- GET /metrics
 
-GET /documents/{id}
+## Response Models
+Standard JSON response envelope.
 
-DELETE /documents/{id}
+## Status Codes
+200, 201, 400, 401, 403, 404, 429, 500
 
-POST /documents/{id}/reindex
+## Rate Limits
+Per-user and per-IP throttling.
 
-Chat
-POST /chat
-
-GET /chat/history
-
-DELETE /chat/{id}
-
-Search
-POST /search
-
-GET /search/suggestions
-
-Connectors
-POST /connectors/github
-
-POST /connectors/google-drive
-
-POST /connectors/notion
-
-GET /connectors
-
-DELETE /connectors/{id}
-
-System
-GET /health
-
-GET /metrics
-
-After API Specification
-This is where I would stop writing documents and start building.
-The implementation order should be:
-Week 1
-Authentication
-
-↓
-
-Week 2
-Workspace
-
-↓
-
-Week 3
-Document Upload
-
-↓
-
-Week 4
-Embedding + Qdrant
-
-↓
-
-Week 5
-Chat + RAG
-
-↓
-
-Week 6
-GitHub Connector
-
-↓
-
-Week 7
-Frontend Polish
-
-↓
-
-Week 8
-Deployment
-
-One thing I would not do
-I would not create documents like:
-Test Plan
-User Manual
-Deployment Guide
-Operations Manual
-before writing the application.
-Those documents are much stronger when they're based on the real implementation rather than assumptions.
+## API Versioning
+All endpoints use `/api/v1`.
