@@ -1,32 +1,27 @@
-from pydantic import BaseModel, ConfigDict, Field
-from uuid import UUID
-from typing import Optional
 from datetime import datetime
+from typing import Optional
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
 
 class UserCreate(BaseModel):
     email: str = Field(..., description="User's email address (from Google OAuth)")
-    username: str = Field(..., description="User's username (from Google OAuth)")
-    first_name: Optional[str] = Field(default=None, description="User's first name (from Google OAuth)")
-    last_name: Optional[str] = Field(default=None, description="User's last name (from Google OAuth)")
-    avatar_url: Optional[str] = Field(default=None, description="URL to user's avatar image (from Google OAuth)")
+    name: str = Field(..., description="User's display name (from Google OAuth)")
+    picture_url: Optional[str] = Field(default=None, description="URL to user's profile picture (from Google OAuth)")
+
 
 class UserUpdate(BaseModel):
-    username: Optional[str] = Field(default=None, description="User's username")
-    first_name: Optional[str] = Field(default=None, description="User's first name")
-    last_name: Optional[str] = Field(default=None, description="User's last name")
-    avatar_url: Optional[str] = Field(default=None, description="URL to user's avatar image")
+    name: Optional[str] = Field(default=None, description="User's display name")
+    picture_url: Optional[str] = Field(default=None, description="URL to user's profile picture")
+
 
 class UserResponse(BaseModel):
     id: UUID
     email: str
-    username: str
-    first_name: Optional[str]
-    last_name: Optional[str]
-    avatar_url: Optional[str]
-    is_active: bool
-    is_verified: bool
+    name: str
+    picture_url: Optional[str]
     created_at: datetime
     updated_at: datetime
-    last_login: Optional[datetime]
 
     model_config = ConfigDict(from_attributes=True)

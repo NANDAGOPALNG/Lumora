@@ -26,8 +26,6 @@ class Settings(BaseSettings):
 
     # External services
     openai_api_key: Optional[str] = None
-    pinecone_api_key: Optional[str] = None
-    chromadb_path: Optional[str] = None
 
     # Environment
     environment: Environment = Environment.DEVELOPMENT

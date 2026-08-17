@@ -5,6 +5,11 @@ from sqlalchemy import pool
 
 from app.config.settings import Settings
 from app.database.base import Base
+
+# Import all models so they are registered on Base.metadata before Alembic
+# introspects it for autogenerate/migrations.
+import app.models  # noqa: F401
+
 from alembic import context
 
 # this is the Alembic Config object, which provides

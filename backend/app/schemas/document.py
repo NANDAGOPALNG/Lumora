@@ -1,33 +1,34 @@
-from pydantic import BaseModel, ConfigDict, Field
-from uuid import UUID
-from typing import Optional
 from datetime import datetime
+from typing import Optional
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.models.document import DocumentStatus
+
 
 class DocumentCreate(BaseModel):
-    title: str = Field(..., description="Document title")
-    content: Optional[str] = Field(default=None, description="Document content")
-    workspace_id: UUID = Field(..., description="ID of the workspace")
-    created_by_id: UUID = Field(..., description="ID of the user who created the document")
-    is_published: bool = Field(default=False, description="Whether the document is published")
-    published_at: Optional[datetime] = Field(default=None, description="Publication timestamp")
+    workspace_id: UUID = Field(..., description="ID of the workspace this document belongs to")
+    filename: str = Field(..., description="Original filename")
+    file_type: str = Field(..., description="File type/extension, e.g. 'pdf'")
+    file_size: int = Field(..., description="File size in bytes")
+    storage_path: str = Field(..., description="Path/key where the file is stored")
+
 
 class DocumentUpdate(BaseModel):
-    title: Optional[str] = Field(default=None, description="Document title")
-    content: Optional[str] = Field(default=None, description="Document content")
-    workspace_id: Optional[UUID] = Field(default=None, description="ID of the workspace")
-    created_by_id: Optional[UUID] = Field(default=None, description="ID of the user who created the document")
-    is_published: Optional[bool] = Field(default=None, description="Whether the document is published")
-    published_at: Optional[datetime] = Field(default=None, description="Publication timestamp")
+    status: Optional[DocumentStatus] = Field(default=None, description="Processing status")
+    chunk_count: Optional[int] = Field(default=None, description="Number of chunks produced")
+
 
 class DocumentResponse(BaseModel):
     id: UUID
-    title: str
-    content: Optional[str]
     workspace_id: UUID
-    created_by_id: UUID
-    is_published: bool
-    created_at: datetime
-    updated_at: datetime
-    published_at: Optional[datetime]
+    filename: str
+    file_type: str
+    file_size: int
+    storage_path: str
+    status: DocumentStatus
+    chunk_count: int
+    uploaded_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

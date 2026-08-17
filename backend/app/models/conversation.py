@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -9,15 +9,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.base import Base
 
 if TYPE_CHECKING:
-    from app.models.connector import Connector
-    from app.models.document import Document
+    from app.models.message import Message
     from app.models.user import User
 
 
-class Workspace(Base):
-    """A workspace owned by a user; the boundary for workspace isolation."""
+class Conversation(Base):
+    """A chat conversation belonging to a user."""
 
-    __tablename__ = "workspaces"
+    __tablename__ = "conversations"
 
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -28,22 +27,16 @@ class Workspace(Base):
         nullable=False,
         index=True,
     )
-    name: Mapped[str] = mapped_column(String, nullable=False)
+    title: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="workspaces")
-    documents: Mapped[List["Document"]] = relationship(
-        "Document",
-        back_populates="workspace",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-    connectors: Mapped[List["Connector"]] = relationship(
-        "Connector",
-        back_populates="workspace",
+    user: Mapped["User"] = relationship("User", back_populates="conversations")
+    messages: Mapped[List["Message"]] = relationship(
+        "Message",
+        back_populates="conversation",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
