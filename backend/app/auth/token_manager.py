@@ -1,63 +1,59 @@
 """
-Token management for Lumora.
+JWT access-token management for Lumora.
 
-This module handles authentication token operations.
-Note: This is a placeholder implementation and should be expanded with actual token logic.
+Lumora is a stateless, JWT-only architecture: only short-lived access
+tokens are issued (see SECRET_KEY / ALGORITHM / ACCESS_TOKEN_EXPIRE_MINUTES
+in Settings). No refresh tokens are created and no tokens are persisted.
 """
 
-from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict
+from uuid import UUID
 
-class TokenManager(ABC):
-    """Abstract base class for token management."""
+from jose import JWTError, jwt
 
-    @abstractmethod
-    def generate_token(self, payload: Dict[str, Any], expires_in: Optional[timedelta] = None) -> str:
-        """Generate an authentication token.
+TOKEN_TYPE_ACCESS = "access"
 
-        Args:
-            payload: Token payload data
-            expires_in: Optional token expiration time
 
-        Returns:
-            Generated authentication token
+class TokenManager:
+    """Creates and validates JWT access tokens."""
+
+    def __init__(self, secret_key: str, algorithm: str, access_token_expire_minutes: int) -> None:
+        self._secret_key = secret_key
+        self._algorithm = algorithm
+        self._access_token_expire_minutes = access_token_expire_minutes
+
+    def create_access_token(self, user_id: UUID) -> str:
+        """Create a signed JWT access token whose subject is the user's UUID."""
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(minutes=self._access_token_expire_minutes)
+
+        payload: Dict[str, Any] = {
+            "sub": str(user_id),
+            "type": TOKEN_TYPE_ACCESS,
+            "iat": now,
+            "exp": expires_at,
+        }
+
+        return jwt.encode(payload, self._secret_key, algorithm=self._algorithm)
+
+    def decode_access_token(self, token: str) -> Dict[str, Any]:
         """
-        pass
+        Decode and validate a JWT access token.
 
-    @abstractmethod
-    def validate_token(self, token: str) -> Optional[Dict[str, Any]]:
-        """Validate an authentication token.
-
-        Args:
-            token: Authentication token to validate
-
-        Returns:
-            Token payload if valid, None otherwise
+        Raises:
+            ValueError: If the token is expired, malformed, has an invalid
+                signature, or is not an access token.
         """
-        pass
+        try:
+            payload = jwt.decode(token, self._secret_key, algorithms=[self._algorithm])
+        except JWTError as exc:
+            raise ValueError(f"Invalid or expired token: {exc}") from exc
 
-    @abstractmethod
-    def decode_token(self, token: str) -> Optional[Dict[str, Any]]:
-        """Decode an authentication token without validation.
+        if payload.get("type") != TOKEN_TYPE_ACCESS:
+            raise ValueError("Token is not a valid access token")
 
-        Args:
-            token: Authentication token to decode
+        if not payload.get("sub"):
+            raise ValueError("Token missing subject claim")
 
-        Returns:
-            Decoded token payload, None if decoding fails
-        """
-        pass
-
-    @abstractmethod
-    def refresh_token(self, token: str, expires_in: Optional[timedelta] = None) -> Optional[str]:
-        """Refresh an authentication token.
-
-        Args:
-            token: Existing authentication token to refresh
-            expires_in: Optional new token expiration time
-
-        Returns:
-            New authentication token, None if refresh fails
-        """
-        pass
+        return payload

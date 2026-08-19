@@ -1,6 +1,7 @@
 from .user import UserCreate, UserUpdate, UserResponse
 from .workspace import WorkspaceCreate, WorkspaceUpdate, WorkspaceResponse
 from .document import DocumentCreate, DocumentUpdate, DocumentResponse
+from .auth import GoogleAuthRequest, AuthUserSummary, GoogleAuthResponse, LogoutResponse
 
 __all__ = [
     "UserCreate",
@@ -12,4 +13,8 @@ __all__ = [
     "DocumentCreate",
     "DocumentUpdate",
     "DocumentResponse",
+    "GoogleAuthRequest",
+    "AuthUserSummary",
+    "GoogleAuthResponse",
+    "LogoutResponse",
 ]

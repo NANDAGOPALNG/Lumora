@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
 
+    # Google OAuth
+    google_client_id: str
+
     # Database
     database_url: Optional[str] = None
 
