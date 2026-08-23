@@ -1,8 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException as StarletteHTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api.v1.auth import router as auth_router
+from app.api.v1.document import router as documents_router
 from app.api.v1.workspace import router as workspaces_router
 from app.config.settings import Settings
 
@@ -18,6 +20,7 @@ app = FastAPI(
 
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(workspaces_router, prefix="/api/v1")
+app.include_router(documents_router, prefix="/api/v1")
 
 
 _DEFAULT_ERROR_CODES = {
@@ -25,6 +28,9 @@ _DEFAULT_ERROR_CODES = {
     401: "UNAUTHORIZED",
     403: "FORBIDDEN",
     404: "NOT_FOUND",
+    413: "FILE_TOO_LARGE",
+    415: "UNSUPPORTED_FILE_TYPE",
+    422: "VALIDATION_ERROR",
     429: "TOO_MANY_REQUESTS",
     500: "INTERNAL_SERVER_ERROR",
 }
@@ -45,6 +51,18 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
         status_code=exc.status_code,
         content={"success": False, "error": error},
         headers=exc.headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Render FastAPI's request validation errors using the same error envelope."""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "success": False,
+            "error": {"code": "VALIDATION_ERROR", "message": "Invalid request"},
+        },
     )
 
 

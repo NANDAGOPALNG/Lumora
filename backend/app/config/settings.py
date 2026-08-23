@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # Database
     database_url: Optional[str] = None
 
+    # Document storage
+    document_storage_path: str = "storage/documents"
+    max_document_size_mb: int = 20
+
     # External services
     openai_api_key: Optional[str] = None
 
@@ -47,6 +51,10 @@ class Settings(BaseSettings):
             return f"sqlite+aiosqlite:///./lumora_{self.environment}.db"
         else:
             raise ValueError("DATABASE_URL must be set in production")
+
+    @property
+    def max_document_size_bytes(self) -> int:
+        return self.max_document_size_mb * 1024 * 1024
 
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION
