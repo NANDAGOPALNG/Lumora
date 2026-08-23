@@ -3,6 +3,7 @@ from fastapi.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse
 
 from app.api.v1.auth import router as auth_router
+from app.api.v1.workspace import router as workspaces_router
 from app.config.settings import Settings
 
 # Load settings and configure logging
@@ -16,6 +17,7 @@ app = FastAPI(
 )
 
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(workspaces_router, prefix="/api/v1")
 
 
 _DEFAULT_ERROR_CODES = {

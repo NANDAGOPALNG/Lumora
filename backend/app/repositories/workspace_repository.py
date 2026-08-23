@@ -22,3 +22,41 @@ class WorkspaceRepository(BaseRepository[Workspace]):
             select(Workspace).where(Workspace.name == name)
         )
         return result.scalar_one_or_none()
+
+    async def get_by_id_and_user(self, workspace_id: any, user_id: any) -> Optional[Workspace]:
+        """Fetch a workspace only if it belongs to the given user.
+
+        The ownership check is part of the WHERE clause itself, so a
+        workspace owned by a different user is never returned.
+        """
+        result = await self.session.execute(
+            select(Workspace).where(
+                Workspace.id == workspace_id, Workspace.user_id == user_id
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def update_for_owner(
+        self, workspace_id: any, user_id: any, update_data: dict
+    ) -> Optional[Workspace]:
+        """Update a workspace only if it belongs to the given user."""
+        workspace = await self.get_by_id_and_user(workspace_id, user_id)
+        if workspace is None:
+            return None
+
+        for key, value in update_data.items():
+            setattr(workspace, key, value)
+
+        await self.session.flush()
+        await self.session.refresh(workspace)
+        return workspace
+
+    async def delete_for_owner(self, workspace_id: any, user_id: any) -> bool:
+        """Delete a workspace only if it belongs to the given user."""
+        workspace = await self.get_by_id_and_user(workspace_id, user_id)
+        if workspace is None:
+            return False
+
+        await self.session.delete(workspace)
+        await self.session.flush()
+        return True

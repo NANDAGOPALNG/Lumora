@@ -20,12 +20,6 @@ class WorkspaceService:
 
         return WorkspaceResponse.model_validate(created_workspace)
 
-    async def get_workspace_by_id(self, workspace_id: UUID) -> Optional[WorkspaceResponse]:
-        workspace = await self.workspace_repository.get_by_id(workspace_id)
-        if workspace:
-            return WorkspaceResponse.model_validate(workspace)
-        return None
-
     async def get_workspaces_by_user(self, user_id: UUID) -> List[WorkspaceResponse]:
         workspaces = await self.workspace_repository.get_by_user(user_id)
         return [WorkspaceResponse.model_validate(workspace) for workspace in workspaces]
@@ -36,12 +30,35 @@ class WorkspaceService:
             return WorkspaceResponse.model_validate(workspace)
         return None
 
-    async def update_workspace(self, workspace_id: UUID, workspace_update: WorkspaceUpdate) -> Optional[WorkspaceResponse]:
-        update_data = workspace_update.model_dump(exclude_unset=True)
-        workspace = await self.workspace_repository.update(workspace_id, update_data)
+    async def get_workspace_for_user(self, workspace_id: UUID, user_id: UUID) -> Optional[WorkspaceResponse]:
+        """Fetch a single workspace, scoped to its owner.
+
+        Returns None both when the workspace doesn't exist and when it
+        belongs to a different user, so callers can't distinguish the two.
+        """
+        workspace = await self.workspace_repository.get_by_id_and_user(workspace_id, user_id)
         if workspace:
             return WorkspaceResponse.model_validate(workspace)
         return None
 
-    async def delete_workspace(self, workspace_id: UUID) -> bool:
-        return await self.workspace_repository.delete(workspace_id)
+    async def update_workspace_for_user(
+        self, workspace_id: UUID, user_id: UUID, workspace_update: WorkspaceUpdate
+    ) -> Optional[WorkspaceResponse]:
+        """Update a workspace, scoped to its owner.
+
+        Returns None both when the workspace doesn't exist and when it
+        belongs to a different user.
+        """
+        update_data = workspace_update.model_dump(exclude_unset=True)
+        workspace = await self.workspace_repository.update_for_owner(workspace_id, user_id, update_data)
+        if workspace:
+            return WorkspaceResponse.model_validate(workspace)
+        return None
+
+    async def delete_workspace_for_user(self, workspace_id: UUID, user_id: UUID) -> bool:
+        """Delete a workspace, scoped to its owner.
+
+        Returns False both when the workspace doesn't exist and when it
+        belongs to a different user.
+        """
+        return await self.workspace_repository.delete_for_owner(workspace_id, user_id)
