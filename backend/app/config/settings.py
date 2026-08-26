@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     document_storage_path: str = "storage/documents"
     max_document_size_mb: int = 20
 
+    # Ingestion / chunking
+    chunk_size: int = 1000
+    chunk_overlap: int = 150
+
     # External services
     openai_api_key: Optional[str] = None
 
