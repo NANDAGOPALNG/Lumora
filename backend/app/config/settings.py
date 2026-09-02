@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 150
 
+    # Embeddings
+    embedding_model_name: str = "BAAI/bge-m3"
+    embedding_batch_size: int = 32
+
     # External services
     openai_api_key: Optional[str] = None
 
