@@ -21,12 +21,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.database.session import get_db
 from app.models.user import User
+from app.repositories.chunk_repository import ChunkRepository
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.workspace_repository import WorkspaceRepository
 from app.schemas.document import DocumentResponse
 from app.services.document_service import (
     DocumentService,
     FileTooLargeError,
+    IngestionFailedError,
     UnsupportedFileTypeError,
 )
 
@@ -34,7 +36,11 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 def get_document_service(session: AsyncSession = Depends(get_db)) -> DocumentService:
-    return DocumentService(DocumentRepository(session), WorkspaceRepository(session))
+    return DocumentService(
+        DocumentRepository(session),
+        WorkspaceRepository(session),
+        ChunkRepository(session),
+    )
 
 
 def _document_not_found() -> HTTPException:
@@ -127,7 +133,13 @@ async def reindex_document(
     current_user: User = Depends(get_current_user),
     document_service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
-    document = await document_service.reindex_document_for_user(document_id, current_user.id)
+    try:
+        document = await document_service.reindex_document_for_user(document_id, current_user.id)
+    except IngestionFailedError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "INGESTION_FAILED", "message": "Document processing failed"},
+        )
     if document is None:
         raise _document_not_found()
     return document

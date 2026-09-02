@@ -10,9 +10,13 @@ in Python afterward.
 
 from typing import List, Optional
 from uuid import UUID, uuid4
+from datetime import datetime, timezone
 
 from app.config.settings import Settings
+from app.ingestion import extract_chunks
+from app.models.chunk import Chunk
 from app.models.document import Document, DocumentStatus
+from app.repositories.chunk_repository import ChunkRepository
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.workspace_repository import WorkspaceRepository
 from app.schemas.document import DocumentResponse
@@ -42,6 +46,10 @@ class FileTooLargeError(Exception):
     """Raised when the uploaded file exceeds the configured maximum size."""
 
 
+class IngestionFailedError(Exception):
+    """Raised when document parsing/chunking or chunk persistence fails."""
+
+
 def _extract_file_type(filename: str) -> str:
     if not filename or "." not in filename:
         raise UnsupportedFileTypeError(f"File has no extension: {filename!r}")
@@ -66,9 +74,16 @@ def _validate_content_type(file_type: str, content_type: Optional[str]) -> None:
 
 
 class DocumentService:
-    def __init__(self, document_repository: DocumentRepository, workspace_repository: WorkspaceRepository):
+    def __init__(
+        self,
+        document_repository: DocumentRepository,
+        workspace_repository: WorkspaceRepository,
+        chunk_repository: ChunkRepository,
+    ):
         self.document_repository = document_repository
         self.workspace_repository = workspace_repository
+        self.chunk_repository = chunk_repository
+        self.session = document_repository.session
 
     async def upload_document(
         self,
@@ -151,13 +166,66 @@ class DocumentService:
         return True
 
     async def reindex_document_for_user(self, document_id: UUID, user_id: UUID) -> Optional[DocumentResponse]:
-        """Move a document back into Processing with chunk_count reset to 0.
+        """Re-run ingestion for a document: parse, chunk, and persist Chunk rows.
 
-        Does not parse, chunk, embed, or index anything - that's wired up
-        in a later task.
+        Returns None if the document doesn't exist or isn't owned by
+        user_id (caller should respond 404 without disclosing which).
+
+        Replaces any existing chunks rather than appending to them. On
+        any failure (parsing/chunking or persistence), old chunks are
+        left untouched, the document is marked Failed, and
+        IngestionFailedError is raised for the caller to turn into an
+        appropriate error response.
         """
-        update_data = {"status": DocumentStatus.PROCESSING, "chunk_count": 0}
-        document = await self.document_repository.update_for_owner(document_id, user_id, update_data)
-        if document:
-            return DocumentResponse.model_validate(document)
-        return None
+        document = await self.document_repository.get_by_id_and_workspace_owner(document_id, user_id)
+        if document is None:
+            return None
+
+        document.status = DocumentStatus.PROCESSING
+        await self.session.flush()
+
+        try:
+            ingested_chunks = extract_chunks(document.storage_path, document.file_type)
+
+            chunk_rows = [
+                Chunk(
+                    document_id=document.id,
+                    chunk_index=ingested_chunk.index,
+                    content=ingested_chunk.text,
+                    metadata_=self._build_chunk_metadata(document, ingested_chunk),
+                )
+                for ingested_chunk in ingested_chunks
+            ]
+
+            # A SAVEPOINT: if anything in this block fails, only the chunk
+            # delete/insert is rolled back - old chunks are left intact,
+            # and the outer transaction (including the Processing status
+            # already flushed above) is still usable afterward.
+            async with self.session.begin_nested():
+                await self.chunk_repository.delete_chunks_for_document(document.id)
+                await self.chunk_repository.create_chunks(chunk_rows)
+
+            persisted_count = await self.chunk_repository.count_chunks(document.id)
+            document.chunk_count = persisted_count
+            document.status = DocumentStatus.INDEXED
+            await self.session.commit()
+        except Exception as exc:
+            document.status = DocumentStatus.FAILED
+            await self.session.commit()
+            raise IngestionFailedError("Document processing failed") from exc
+
+        return DocumentResponse.model_validate(document)
+
+    @staticmethod
+    def _build_chunk_metadata(document: Document, ingested_chunk) -> dict:
+        metadata = {
+            "document_id": str(document.id),
+            "workspace_id": str(document.workspace_id),
+            "filename": document.filename,
+            "chunk_index": ingested_chunk.index,
+            "source": document.file_type,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if ingested_chunk.page_number is not None:
+            metadata["page_number"] = ingested_chunk.page_number
+        return metadata
