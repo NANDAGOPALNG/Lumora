@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     embedding_model_name: str = "BAAI/bge-m3"
     embedding_batch_size: int = 32
 
+    # Qdrant
+    qdrant_url: Optional[str] = None
+    qdrant_api_key: Optional[str] = None
+
     # External services
     openai_api_key: Optional[str] = None
 
