@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 from datetime import datetime, timezone
 
 from app.config.settings import Settings
+from app.embeddings import embed_texts
 from app.ingestion import extract_chunks
 from app.models.chunk import Chunk
 from app.models.document import Document, DocumentStatus
@@ -21,6 +22,7 @@ from app.repositories.document_repository import DocumentRepository
 from app.repositories.workspace_repository import WorkspaceRepository
 from app.schemas.document import DocumentResponse
 from app.storage import local_storage
+from app.vector_store import QdrantChunkPoint, QdrantIntegrationError, QdrantVectorStore
 
 ALLOWED_FILE_TYPES = {"pdf", "docx", "txt", "md"}
 
@@ -79,10 +81,12 @@ class DocumentService:
         document_repository: DocumentRepository,
         workspace_repository: WorkspaceRepository,
         chunk_repository: ChunkRepository,
+        vector_store: QdrantVectorStore,
     ):
         self.document_repository = document_repository
         self.workspace_repository = workspace_repository
         self.chunk_repository = chunk_repository
+        self.vector_store = vector_store
         self.session = document_repository.session
 
     async def upload_document(
@@ -166,16 +170,20 @@ class DocumentService:
         return True
 
     async def reindex_document_for_user(self, document_id: UUID, user_id: UUID) -> Optional[DocumentResponse]:
-        """Re-run ingestion for a document: parse, chunk, and persist Chunk rows.
+        """Re-run ingestion for a document: parse, chunk, persist Chunk rows,
+        embed the new chunks with BGE-M3, and replace the document's vectors
+        in Qdrant.
 
         Returns None if the document doesn't exist or isn't owned by
         user_id (caller should respond 404 without disclosing which).
 
-        Replaces any existing chunks rather than appending to them. On
-        any failure (parsing/chunking or persistence), old chunks are
-        left untouched, the document is marked Failed, and
-        IngestionFailedError is raised for the caller to turn into an
-        appropriate error response.
+        Replaces any existing PostgreSQL chunks and Qdrant points rather
+        than appending to them. On any failure (parsing/chunking,
+        persistence, embedding, or Qdrant indexing), the document is
+        marked Failed and IngestionFailedError is raised for the caller
+        to turn into an appropriate error response; the document is only
+        marked Indexed once both PostgreSQL persistence and Qdrant
+        indexing have succeeded.
         """
         document = await self.document_repository.get_by_id_and_workspace_owner(document_id, user_id)
         if document is None:
@@ -205,7 +213,47 @@ class DocumentService:
                 await self.chunk_repository.delete_chunks_for_document(document.id)
                 await self.chunk_repository.create_chunks(chunk_rows)
 
+            # create_chunks() flushes the ORM objects above, so each
+            # chunk_row.id is now the persisted PostgreSQL UUID - reuse it
+            # as the Qdrant point ID rather than generating a new one.
             persisted_count = await self.chunk_repository.count_chunks(document.id)
+
+            # PostgreSQL and Qdrant are two separate systems with no shared
+            # transaction. Generate embeddings for the full new chunk set
+            # before touching Qdrant at all, so the old (still valid)
+            # Qdrant points are never removed unless replacement vectors
+            # are actually ready.
+            vectors = embed_texts([chunk_row.content for chunk_row in chunk_rows])
+
+            qdrant_points = [
+                QdrantChunkPoint(
+                    chunk_id=chunk_row.id,
+                    document_id=document.id,
+                    workspace_id=document.workspace_id,
+                    filename=document.filename,
+                    chunk_index=chunk_row.chunk_index,
+                    source=document.file_type,
+                    vector=vector,
+                )
+                for chunk_row, vector in zip(chunk_rows, vectors)
+            ]
+
+            try:
+                await self.vector_store.delete_document_chunks(document.id)
+                await self.vector_store.upsert_chunks(qdrant_points)
+            except QdrantIntegrationError:
+                # Best-effort cleanup so a failed reindex doesn't leave a
+                # half-written vector set behind. delete_document_chunks
+                # only ever removes points for this document_id, so other
+                # documents' vectors are never touched. If cleanup itself
+                # fails, swallow that failure in favor of re-raising the
+                # original error below.
+                try:
+                    await self.vector_store.delete_document_chunks(document.id)
+                except QdrantIntegrationError:
+                    pass
+                raise
+
             document.chunk_count = persisted_count
             document.status = DocumentStatus.INDEXED
             await self.session.commit()

@@ -31,15 +31,29 @@ from app.services.document_service import (
     IngestionFailedError,
     UnsupportedFileTypeError,
 )
+from app.vector_store import QdrantVectorStore
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
+# A single QdrantVectorStore per process, mirroring how the embedding
+# engine caches its model: the client connection is created lazily on
+# first use and reused across requests rather than reconnecting per call.
+_vector_store = QdrantVectorStore()
 
-def get_document_service(session: AsyncSession = Depends(get_db)) -> DocumentService:
+
+def get_vector_store() -> QdrantVectorStore:
+    return _vector_store
+
+
+def get_document_service(
+    session: AsyncSession = Depends(get_db),
+    vector_store: QdrantVectorStore = Depends(get_vector_store),
+) -> DocumentService:
     return DocumentService(
         DocumentRepository(session),
         WorkspaceRepository(session),
         ChunkRepository(session),
+        vector_store,
     )
 
 
