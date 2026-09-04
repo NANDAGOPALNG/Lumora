@@ -16,25 +16,22 @@ to be composed by a future SearchService.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Union
+from typing import List, Optional
 from uuid import UUID
 
 from qdrant_client.http import models as qmodels
 
 from app.embeddings import embed_text
+from app.retrieval.validation import (
+    DEFAULT_TOP_K,
+    MAX_TOP_K,
+    RetrievalValidationError,
+    UUIDLike,
+    validate_query,
+    validate_top_k,
+    validate_uuid,
+)
 from app.vector_store import QdrantVectorStore
-
-# Sensible default and hard ceiling for top_k, so a caller can't
-# accidentally (or maliciously) request an unbounded number of points
-# back from Qdrant.
-DEFAULT_TOP_K = 5
-MAX_TOP_K = 50
-
-UUIDLike = Union[UUID, str]
-
-
-class RetrievalValidationError(Exception):
-    """Raised when dense_search() is called with invalid input."""
 
 
 @dataclass
@@ -56,24 +53,15 @@ class DenseSearchResult:
 
 
 def _validate_query(query: str) -> str:
-    if not isinstance(query, str) or not query.strip():
-        raise RetrievalValidationError("query must be a non-empty string")
-    return query
+    return validate_query(query)
 
 
 def _validate_uuid(value: UUIDLike, field_name: str) -> UUID:
-    if isinstance(value, UUID):
-        return value
-    try:
-        return UUID(str(value))
-    except (ValueError, AttributeError, TypeError) as exc:
-        raise RetrievalValidationError(f"{field_name} must be a valid UUID") from exc
+    return validate_uuid(value, field_name)
 
 
 def _validate_top_k(top_k: int) -> int:
-    if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
-        raise RetrievalValidationError("top_k must be a positive integer")
-    return min(top_k, MAX_TOP_K)
+    return validate_top_k(top_k)
 
 
 def _build_filter(workspace_id: UUID, document_id: Optional[UUID]) -> qmodels.Filter:
