@@ -200,6 +200,37 @@ class QdrantVectorStore:
             "source": chunk.source,
         }
 
+    async def search(
+        self,
+        query_vector: Sequence[float],
+        query_filter: qmodels.Filter,
+        limit: int,
+    ) -> List[qmodels.ScoredPoint]:
+        """Dense similarity search against `knowledge_chunks`.
+
+        `query_filter` is built entirely by the caller (e.g. the
+        retrieval layer) - this method applies exactly the filter it's
+        given and does not add, relax, or infer any filtering of its
+        own. Uses `query_points`, the current (non-deprecated) async
+        search API on qdrant-client, rather than the older `search()`
+        method.
+        """
+        await self.ensure_collection()
+        client = self._get_client()
+
+        try:
+            response = await client.query_points(
+                collection_name=COLLECTION_NAME,
+                query=list(query_vector),
+                query_filter=query_filter,
+                limit=limit,
+                with_payload=True,
+            )
+        except Exception as exc:
+            raise QdrantIntegrationError("Failed to search Qdrant") from exc
+
+        return response.points
+
     async def delete_document_chunks(self, document_id: UUID) -> None:
         """Delete all points belonging to a single document.
 
