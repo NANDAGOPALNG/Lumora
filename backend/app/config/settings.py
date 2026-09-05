@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     embedding_model_name: str = "BAAI/bge-m3"
     embedding_batch_size: int = 32
 
+    # Reranking
+    reranker_model_name: str = "BAAI/bge-reranker-base"
+
     # Qdrant
     qdrant_url: Optional[str] = None
     qdrant_api_key: Optional[str] = None
