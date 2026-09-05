@@ -1,12 +1,13 @@
 """Retrieval primitives for Lumora.
 
 Exposes dense (embedding-similarity, Qdrant) retrieval, keyword
-(PostgreSQL full-text) retrieval, hybrid (RRF-fused) retrieval, and
-cross-encoder reranking as composable primitives. Context building is
-a separate, later stage and belongs in its own module - this package
-is not wired into any API route or SearchService yet.
+(PostgreSQL full-text) retrieval, hybrid (RRF-fused) retrieval,
+cross-encoder reranking, and context building as composable
+primitives. This package is not wired into any API route or
+SearchService yet.
 """
 
+from app.retrieval.context_builder import BuiltContext, ContextBuilder, ContextSource
 from app.retrieval.dense_retriever import DenseRetriever, DenseSearchResult
 from app.retrieval.hybrid_retriever import HybridRetriever, HybridSearchResult
 from app.retrieval.keyword_retriever import KeywordRetriever, KeywordSearchResult
@@ -23,6 +24,9 @@ __all__ = [
     "CrossEncoderReranker",
     "RerankedResult",
     "RerankerError",
+    "ContextBuilder",
+    "BuiltContext",
+    "ContextSource",
     "RetrievalValidationError",
     "DEFAULT_TOP_K",
     "MAX_TOP_K",
