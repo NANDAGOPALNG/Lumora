@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     # External services
     openai_api_key: Optional[str] = None
 
+    # LLM generation (Gemini)
+    gemini_api_key: Optional[str] = None
+    gemini_model_name: str = "gemini-3.6-flash"
+
     # Environment
     environment: Environment = Environment.DEVELOPMENT
 
