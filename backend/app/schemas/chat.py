@@ -10,6 +10,13 @@ from app.schemas.search import SearchSourceResponse
 class ChatRequest(BaseModel):
     query: str = Field(..., description="Raw natural-language user question")
     workspace_id: UUID = Field(..., description="ID of the workspace to search within")
+    conversation_id: Optional[UUID] = Field(
+        default=None,
+        description=(
+            "Optionally continue an existing conversation. Omit to start a new "
+            "conversation; the new conversation's id is returned in the response."
+        ),
+    )
     document_id: Optional[UUID] = Field(
         default=None, description="Optionally restrict retrieval to a single document"
     )
@@ -24,6 +31,14 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str = Field(..., description="The generated answer, grounded in the retrieved context")
     query: str = Field(..., description="The normalized query actually used for retrieval")
+    conversation_id: UUID = Field(
+        ...,
+        description=(
+            "The conversation this turn was recorded under - either the "
+            "supplied conversation_id, or a newly created conversation's id "
+            "when conversation_id was omitted"
+        ),
+    )
     sources: List[SearchSourceResponse] = Field(
         default_factory=list,
         description="Structured citation metadata for the sources the answer draws on, in order",

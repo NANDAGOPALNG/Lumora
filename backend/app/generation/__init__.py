@@ -6,6 +6,6 @@ a `BaseLLMProvider`. Actual LLM invocation lives in `app.llm`; this
 package only builds the prompt text.
 """
 
-from app.generation.prompt_builder import RagPromptBuilder
+from app.generation.prompt_builder import ConversationTurn, RagPromptBuilder
 
-__all__ = ["RagPromptBuilder"]
+__all__ = ["RagPromptBuilder", "ConversationTurn"]

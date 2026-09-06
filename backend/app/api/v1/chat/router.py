@@ -2,22 +2,25 @@
 Chat API routes.
 
 Implements POST /api/v1/chat: the RAG chat flow (SearchService ->
-RagPromptBuilder -> GeminiProvider) exposed over HTTP.
-GET /chat/history and DELETE /chat/{id} require conversation/message
-persistence and are not implemented here (see app/models/conversation.py,
-app/models/message.py, which exist but are not yet wired up).
+RagPromptBuilder -> GeminiProvider), with conversation/message
+persistence, exposed over HTTP. GET /chat/history and DELETE /chat/{id}
+still require dedicated list/detail/delete endpoints and are not
+implemented here.
 
 Requires an authenticated user (`get_current_user`). The requested
 workspace_id is verified against that user's own workspaces before
 being passed to ChatService, using the same WorkspaceRepository lookup
 (and the same not-found-rather-than-forbidden convention) as the
 search router - this router does not duplicate that authorization
-logic, it reuses it exactly as the search router does.
+logic, it reuses it exactly as the search router does. `conversation_id`
+ownership, by contrast, is verified inside ChatService itself (see
+ConversationNotFoundError below) since it's part of the same
+orchestration as loading that conversation's history.
 
 This router only translates HTTP input/output to and from
 ChatService, and maps ChatService/provider failures onto HTTP
-responses - it performs no retrieval, prompt-construction, or
-generation logic of its own.
+responses - it performs no retrieval, prompt-construction, generation,
+or persistence logic of its own.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -34,6 +37,8 @@ from app.llm.base import (
 )
 from app.llm.gemini_provider import GeminiProvider
 from app.models.user import User
+from app.repositories.conversation_repository import ConversationRepository
+from app.repositories.message_repository import MessageRepository
 from app.repositories.workspace_repository import WorkspaceRepository
 from app.retrieval import (
     ContextBuilder,
@@ -46,7 +51,7 @@ from app.retrieval import (
 )
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.search import SearchSourceResponse
-from app.services.chat_service import ChatService
+from app.services.chat_service import ChatService, ConversationNotFoundError
 from app.services.search_service import SearchService
 from app.vector_store import QdrantVectorStore
 
@@ -58,13 +63,15 @@ def get_chat_service(
     vector_store: QdrantVectorStore = Depends(get_vector_store),
 ) -> ChatService:
     """Compose ChatService from the existing retrieval primitives plus
-    the new generation-layer components.
+    the generation-layer and persistence-layer components.
 
     Mirrors `get_search_service` (app/api/v1/search/router.py) for the
     retrieval side - the same process-wide QdrantVectorStore singleton
     and per-request AsyncSession, no new database/vector-store
     abstraction - and adds a GeminiProvider and RagPromptBuilder for
-    the generation side.
+    the generation side, and ConversationRepository/MessageRepository
+    (bound to the same request-scoped session) for persistence.
+    ChatService itself never constructs a repository or a session.
     """
     dense_retriever = DenseRetriever(vector_store)
     keyword_retriever = KeywordRetriever(session)
@@ -81,6 +88,8 @@ def get_chat_service(
         search_service,
         GeminiProvider(),
         RagPromptBuilder(),
+        ConversationRepository(session),
+        MessageRepository(session),
     )
 
 
@@ -88,6 +97,18 @@ def _workspace_not_found() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail={"code": "WORKSPACE_NOT_FOUND", "message": "Workspace not found"},
+    )
+
+
+def _conversation_not_found() -> HTTPException:
+    """Same shape/convention as `_workspace_not_found` - a generic 404
+    used both when a conversation_id doesn't exist at all and when it
+    belongs to a different user, so a request can never distinguish
+    the two (see ConversationNotFoundError).
+    """
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={"code": "CONVERSATION_NOT_FOUND", "message": "Conversation not found"},
     )
 
 
@@ -109,9 +130,13 @@ async def chat(
         result = await chat_service.chat(
             payload.query,
             payload.workspace_id,
+            current_user.id,
+            conversation_id=payload.conversation_id,
             document_id=payload.document_id,
             top_k=payload.top_k,
         )
+    except ConversationNotFoundError:
+        raise _conversation_not_found()
     except RetrievalValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -145,6 +170,7 @@ async def chat(
     return ChatResponse(
         answer=result.answer,
         query=result.query,
+        conversation_id=result.conversation_id,
         sources=[
             SearchSourceResponse(
                 chunk_id=source.chunk_id,
