@@ -1,29 +1,42 @@
 """
 Chat API routes.
 
-Implements POST /api/v1/chat: the RAG chat flow (SearchService ->
-RagPromptBuilder -> GeminiProvider), with conversation/message
-persistence, exposed over HTTP. GET /chat/history and DELETE /chat/{id}
-still require dedicated list/detail/delete endpoints and are not
-implemented here.
+Implements:
+* POST /api/v1/chat - the RAG chat flow (SearchService ->
+  RagPromptBuilder -> GeminiProvider), with conversation/message
+  persistence.
+* GET /api/v1/chat/history - list the current user's conversations,
+  newest first.
+* GET /api/v1/chat/{conversation_id} - a single conversation and its
+  messages, in chronological order.
+* DELETE /api/v1/chat/{conversation_id} - delete a conversation (and,
+  via the existing DB-level cascade, its messages).
 
-Requires an authenticated user (`get_current_user`). The requested
-workspace_id is verified against that user's own workspaces before
-being passed to ChatService, using the same WorkspaceRepository lookup
-(and the same not-found-rather-than-forbidden convention) as the
-search router - this router does not duplicate that authorization
-logic, it reuses it exactly as the search router does. `conversation_id`
-ownership, by contrast, is verified inside ChatService itself (see
-ConversationNotFoundError below) since it's part of the same
-orchestration as loading that conversation's history.
+Requires an authenticated user (`get_current_user`). For POST /chat,
+the requested workspace_id is verified against that user's own
+workspaces before being passed to ChatService, using the same
+WorkspaceRepository lookup (and the same not-found-rather-than-
+forbidden convention) as the search router - this router does not
+duplicate that authorization logic, it reuses it exactly as the
+search router does. The history/detail/delete endpoints are
+conversation-scoped only (no workspace_id involved), so no workspace
+lookup applies to them. `conversation_id` ownership - for all four
+endpoints - is verified inside ChatService itself (see
+ConversationNotFoundError below), which raises the same single
+exception whether a conversation_id doesn't exist at all or belongs to
+a different user; this router maps it to the same generic 404 either
+way, via `_conversation_not_found()`.
 
 This router only translates HTTP input/output to and from
 ChatService, and maps ChatService/provider failures onto HTTP
 responses - it performs no retrieval, prompt-construction, generation,
-or persistence logic of its own.
+or persistence/query logic of its own.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.document.router import get_vector_store
@@ -49,7 +62,13 @@ from app.retrieval import (
     QueryRewriter,
     RetrievalValidationError,
 )
-from app.schemas.chat import ChatRequest, ChatResponse
+from app.schemas.chat import (
+    ChatRequest,
+    ChatResponse,
+    ConversationHistoryResponse,
+    ConversationResponse,
+    MessageResponse,
+)
 from app.schemas.search import SearchSourceResponse
 from app.services.chat_service import ChatService, ConversationNotFoundError
 from app.services.search_service import SearchService
@@ -184,3 +203,66 @@ async def chat(
             for source in result.sources
         ],
     )
+
+
+@router.get("/history", response_model=List[ConversationResponse])
+async def list_conversations(
+    current_user: User = Depends(get_current_user),
+    chat_service: ChatService = Depends(get_chat_service),
+) -> List[ConversationResponse]:
+    """List the current user's conversations, newest first.
+
+    Registered before GET /{conversation_id} so the literal "/history"
+    path is matched first, rather than being parsed as a
+    conversation_id.
+    """
+    conversations = await chat_service.get_history(current_user.id)
+    return [
+        ConversationResponse.model_validate(conversation)
+        for conversation in conversations
+    ]
+
+
+@router.get("/{conversation_id}", response_model=ConversationHistoryResponse)
+async def get_conversation(
+    conversation_id: UUID,
+    current_user: User = Depends(get_current_user),
+    chat_service: ChatService = Depends(get_chat_service),
+) -> ConversationHistoryResponse:
+    """Fetch a single conversation and its messages, in chronological
+    order. Returns the generic CONVERSATION_NOT_FOUND 404 both when
+    conversation_id doesn't exist and when it belongs to another user.
+    """
+    try:
+        detail = await chat_service.get_conversation(conversation_id, current_user.id)
+    except ConversationNotFoundError:
+        raise _conversation_not_found()
+
+    return ConversationHistoryResponse(
+        id=detail.conversation.id,
+        title=detail.conversation.title,
+        created_at=detail.conversation.created_at,
+        messages=[
+            MessageResponse.model_validate(message) for message in detail.messages
+        ],
+    )
+
+
+@router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_conversation(
+    conversation_id: UUID,
+    current_user: User = Depends(get_current_user),
+    chat_service: ChatService = Depends(get_chat_service),
+) -> Response:
+    """Delete a conversation owned by the current user. Its messages
+    are removed via the existing Conversation -> Message cascade, not
+    by any separate deletion logic here. Returns the generic
+    CONVERSATION_NOT_FOUND 404 both when conversation_id doesn't exist
+    and when it belongs to another user.
+    """
+    try:
+        await chat_service.delete_conversation(conversation_id, current_user.id)
+    except ConversationNotFoundError:
+        raise _conversation_not_found()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

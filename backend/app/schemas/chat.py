@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.retrieval.validation import DEFAULT_TOP_K, MAX_TOP_K
 from app.schemas.search import SearchSourceResponse
@@ -43,3 +44,44 @@ class ChatResponse(BaseModel):
         default_factory=list,
         description="Structured citation metadata for the sources the answer draws on, in order",
     )
+
+
+class ConversationResponse(BaseModel):
+    """A conversation's metadata only - no messages.
+
+    Used for GET /chat/history, where returning every message for
+    every conversation would be unnecessary for a list view.
+    """
+
+    id: UUID = Field(..., description="Conversation id")
+    title: Optional[str] = Field(default=None, description="Conversation title, if any")
+    created_at: datetime = Field(..., description="When the conversation was created")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MessageResponse(BaseModel):
+    """A single message within a conversation."""
+
+    id: UUID = Field(..., description="Message id")
+    role: str = Field(..., description='"user" or "assistant"')
+    content: str = Field(..., description="Message text")
+    created_at: datetime = Field(..., description="When the message was created")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ConversationHistoryResponse(BaseModel):
+    """A single conversation's metadata plus its messages, in
+    chronological order. Used for GET /chat/{conversation_id}.
+    """
+
+    id: UUID = Field(..., description="Conversation id")
+    title: Optional[str] = Field(default=None, description="Conversation title, if any")
+    created_at: datetime = Field(..., description="When the conversation was created")
+    messages: List[MessageResponse] = Field(
+        default_factory=list,
+        description="This conversation's messages, oldest first",
+    )
+
+    model_config = ConfigDict(from_attributes=True)

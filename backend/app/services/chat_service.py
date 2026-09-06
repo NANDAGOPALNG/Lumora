@@ -36,6 +36,8 @@ from uuid import UUID
 
 from app.generation.prompt_builder import ConversationTurn, RagPromptBuilder
 from app.llm.base import BaseLLMProvider
+from app.models.conversation import Conversation
+from app.models.message import Message
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.message_repository import MessageRepository
 from app.retrieval.context_builder import ContextSource
@@ -70,6 +72,20 @@ class ChatResult:
     query: str
     conversation_id: UUID
     sources: List[ContextSource]
+
+
+@dataclass
+class ConversationDetail:
+    """A single conversation plus its messages, in chronological order.
+
+    Both are the raw ORM model instances (`Conversation`, `Message`)
+    - as with `ChatResult.sources` above, ChatService hands back
+    domain data and leaves building an API response schema to the
+    router, rather than importing/depending on `app.schemas` itself.
+    """
+
+    conversation: Conversation
+    messages: List[Message]
 
 
 class ChatService:
@@ -205,3 +221,56 @@ class ChatService:
             conversation_id=conversation.id,
             sources=search_result.context.sources,
         )
+
+    async def get_history(self, user_id: UUID) -> List[Conversation]:
+        """List every conversation belonging to `user_id`, newest first.
+
+        A thin passthrough to `ConversationRepository.get_by_user`,
+        which already scopes the query to `user_id` and orders
+        newest-first - no additional filtering, sorting, or ownership
+        logic is needed or added here.
+        """
+        return await self.conversation_repository.get_by_user(user_id)
+
+    async def get_conversation(
+        self, conversation_id: UUID, user_id: UUID
+    ) -> ConversationDetail:
+        """Fetch one conversation and its messages, in chronological
+        order, scoped to `user_id`.
+
+        Raises ConversationNotFoundError if `conversation_id` doesn't
+        exist or doesn't belong to `user_id` - the same check, and the
+        same single exception, `chat()` already uses for a supplied
+        conversation_id. Messages are only loaded via
+        `MessageRepository.get_by_conversation` (not the `_and_user`
+        variant) because ownership has already been verified by the
+        `get_by_id_and_user` call directly above it.
+        """
+        conversation = await self.conversation_repository.get_by_id_and_user(
+            conversation_id, user_id
+        )
+        if conversation is None:
+            raise ConversationNotFoundError(
+                f"Conversation {conversation_id} was not found"
+            )
+
+        messages = await self.message_repository.get_by_conversation(conversation.id)
+        return ConversationDetail(conversation=conversation, messages=messages)
+
+    async def delete_conversation(self, conversation_id: UUID, user_id: UUID) -> None:
+        """Delete a conversation, scoped to `user_id`.
+
+        Raises ConversationNotFoundError if `conversation_id` doesn't
+        exist or doesn't belong to `user_id`, mirroring `chat()` and
+        `get_conversation()` above. The conversation's messages are
+        removed via the existing `Conversation` -> `Message` cascade
+        (see app/models/conversation.py) - no separate message
+        deletion is performed here.
+        """
+        deleted = await self.conversation_repository.delete_for_owner(
+            conversation_id, user_id
+        )
+        if not deleted:
+            raise ConversationNotFoundError(
+                f"Conversation {conversation_id} was not found"
+            )
