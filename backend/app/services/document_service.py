@@ -169,10 +169,19 @@ class DocumentService:
         local_storage.delete_file(document.storage_path)
         return True
 
-    async def reindex_document_for_user(self, document_id: UUID, user_id: UUID) -> Optional[DocumentResponse]:
+    async def reindex_document_for_user(
+        self, document_id: UUID, user_id: UUID, *, extra_chunk_metadata: Optional[dict] = None
+    ) -> Optional[DocumentResponse]:
         """Re-run ingestion for a document: parse, chunk, persist Chunk rows,
         embed the new chunks with BGE-M3, and replace the document's vectors
         in Qdrant.
+
+        `extra_chunk_metadata`, if given, is merged into every chunk's
+        metadata dict on top of the normal fields (see
+        `_build_chunk_metadata`) - used by GitHub sync (Wave 5B) to attach
+        source/repository/branch/URL/connector_id to each of a GitHub file's
+        chunks without changing what gets stored for an ordinary upload,
+        where it's simply omitted (None).
 
         Returns None if the document doesn't exist or isn't owned by
         user_id (caller should respond 404 without disclosing which).
@@ -200,7 +209,7 @@ class DocumentService:
                     document_id=document.id,
                     chunk_index=ingested_chunk.index,
                     content=ingested_chunk.text,
-                    metadata_=self._build_chunk_metadata(document, ingested_chunk),
+                    metadata_=self._build_chunk_metadata(document, ingested_chunk, extra_chunk_metadata),
                 )
                 for ingested_chunk in ingested_chunks
             ]
@@ -265,7 +274,9 @@ class DocumentService:
         return DocumentResponse.model_validate(document)
 
     @staticmethod
-    def _build_chunk_metadata(document: Document, ingested_chunk) -> dict:
+    def _build_chunk_metadata(
+        document: Document, ingested_chunk, extra_chunk_metadata: Optional[dict] = None
+    ) -> dict:
         metadata = {
             "document_id": str(document.id),
             "workspace_id": str(document.workspace_id),
@@ -276,4 +287,6 @@ class DocumentService:
         }
         if ingested_chunk.page_number is not None:
             metadata["page_number"] = ingested_chunk.page_number
+        if extra_chunk_metadata:
+            metadata.update(extra_chunk_metadata)
         return metadata

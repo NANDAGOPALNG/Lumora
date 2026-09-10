@@ -8,6 +8,9 @@ Implements, per the API specification's Connector APIs section:
   the current user (workspace_id is a required query parameter).
 * DELETE /api/v1/connectors/{connector_id} - delete a connector owned
   by the current user.
+* POST /api/v1/connectors/{connector_id}/sync - fetch and index a
+  connected GitHub repository's supported files through the existing
+  document ingestion pipeline (Wave 5B).
 
 Google Drive and Notion connectors (also listed in the API
 specification) are not implemented in this wave.
@@ -17,14 +20,16 @@ Ownership is enforced by ConnectorService/ConnectorRepository at the
 query level (see their docstrings) - this router only translates
 between HTTP and ConnectorService, and maps
 ConnectorWorkspaceNotFoundError / ConnectorNotFoundError /
-ConnectorAuthenticationError / ConnectorResourceNotFoundError onto the
-appropriate HTTP responses. It performs no database queries or GitHub
-API calls of its own.
+ConnectorTypeMismatchError / ConnectorAuthenticationError /
+ConnectorResourceNotFoundError onto the appropriate HTTP responses. It
+performs no database queries, GitHub API calls, or ingestion logic of
+its own.
 
-The GitHub token in POST /connectors/github's request body is used
-only to validate access; it is never persisted, logged, or included
-in any response - ConnectorResponse exposes only safe metadata (id,
-workspace_id, type, connection_name, last_synced, active).
+The GitHub token in POST /connectors/github's and
+POST /connectors/{id}/sync's request bodies is used only to validate
+access / authenticate the sync; it is never persisted, logged, or
+included in any response - ConnectorResponse/GitHubSyncResponse expose
+only safe metadata.
 """
 
 from typing import List
@@ -33,24 +38,46 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.document.router import get_vector_store
 from app.auth.dependencies import get_current_user
 from app.connectors.base import ConnectorAuthenticationError, ConnectorResourceNotFoundError
 from app.database.session import get_db
 from app.models.user import User
+from app.repositories.chunk_repository import ChunkRepository
 from app.repositories.connector_repository import ConnectorRepository
+from app.repositories.document_repository import DocumentRepository
 from app.repositories.workspace_repository import WorkspaceRepository
-from app.schemas.connector import ConnectorResponse, GitHubConnectorCreate
+from app.schemas.connector import (
+    ConnectorResponse,
+    GitHubConnectorCreate,
+    GitHubSyncRequest,
+    GitHubSyncResponse,
+)
 from app.services.connector_service import (
     ConnectorNotFoundError,
     ConnectorService,
+    ConnectorTypeMismatchError,
     ConnectorWorkspaceNotFoundError,
 )
+from app.services.document_service import DocumentService
+from app.vector_store import QdrantVectorStore
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
 
 
-def get_connector_service(session: AsyncSession = Depends(get_db)) -> ConnectorService:
-    return ConnectorService(ConnectorRepository(session), WorkspaceRepository(session))
+def get_connector_service(
+    session: AsyncSession = Depends(get_db),
+    vector_store: QdrantVectorStore = Depends(get_vector_store),
+) -> ConnectorService:
+    document_service = DocumentService(
+        DocumentRepository(session),
+        WorkspaceRepository(session),
+        ChunkRepository(session),
+        vector_store,
+    )
+    return ConnectorService(
+        ConnectorRepository(session), WorkspaceRepository(session), document_service
+    )
 
 
 def _workspace_not_found() -> HTTPException:
@@ -127,3 +154,38 @@ async def delete_connector(
         raise _connector_not_found()
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{connector_id}/sync", response_model=GitHubSyncResponse)
+async def sync_github_connector(
+    connector_id: UUID,
+    payload: GitHubSyncRequest,
+    current_user: User = Depends(get_current_user),
+    connector_service: ConnectorService = Depends(get_connector_service),
+) -> GitHubSyncResponse:
+    try:
+        summary = await connector_service.sync_github(
+            connector_id=connector_id,
+            user_id=current_user.id,
+            repo_full_name=payload.repo_full_name,
+            github_token=payload.github_token,
+        )
+    except ConnectorNotFoundError:
+        raise _connector_not_found()
+    except ConnectorTypeMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "UNSUPPORTED_CONNECTOR_TYPE", "message": str(exc)},
+        )
+    except ConnectorAuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_GITHUB_CREDENTIALS", "message": str(exc)},
+        )
+    except ConnectorResourceNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "GITHUB_REPOSITORY_NOT_FOUND", "message": str(exc)},
+        )
+
+    return GitHubSyncResponse.model_validate(summary)

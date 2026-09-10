@@ -39,3 +39,37 @@ class ConnectorResponse(BaseModel):
     active: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class GitHubSyncRequest(BaseModel):
+    """Request body for POST /api/v1/connectors/{connector_id}/sync.
+
+    Both fields are request-provided rather than stored: `github_token`
+    because Wave 5A's Connector model has no credential field, and
+    `repo_full_name` because the connector's own `connection_name` is a
+    free-text display label that may not reliably identify the
+    repository - see the Wave 5B report for why this is flagged as a
+    Wave 5C architectural item rather than worked around here. Neither
+    value is persisted or ever included in the response.
+    """
+
+    repo_full_name: str = Field(
+        ...,
+        description="GitHub repository in 'owner/repo' form; must match this connector's repository",
+    )
+    github_token: str = Field(
+        ..., description="GitHub token used to authenticate this sync; never stored"
+    )
+
+
+class GitHubSyncResponse(BaseModel):
+    """Safe summary of one sync run - never includes any credential."""
+
+    connector_id: UUID
+    repository: str
+    files_discovered: int
+    files_indexed: int
+    files_skipped: int
+    status: str
+
+    model_config = ConfigDict(from_attributes=True)
