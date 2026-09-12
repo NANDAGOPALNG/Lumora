@@ -97,9 +97,15 @@ class DocumentService:
         filename: str,
         content_type: Optional[str],
         content: bytes,
+        connector_id: Optional[UUID] = None,
     ) -> Optional[DocumentResponse]:
         """
         Validate, store, and record an uploaded document.
+
+        `connector_id`, if given, marks this document as owned by that
+        connector (e.g. a GitHub sync, Wave 5C) rather than a manual
+        upload - see the `connector_id` note on the Document model.
+        Ordinary uploads leave this None.
 
         Returns None if workspace_id doesn't exist or isn't owned by
         user_id (caller should respond 404 without disclosing which).
@@ -129,6 +135,7 @@ class DocumentService:
             document = Document(
                 id=document_id,
                 workspace_id=workspace_id,
+                connector_id=connector_id,
                 filename=filename,
                 file_type=file_type,
                 file_size=len(content),
@@ -162,11 +169,34 @@ class DocumentService:
         return None
 
     async def delete_document_for_user(self, document_id: UUID, user_id: UUID) -> bool:
+        """Delete a document: its PostgreSQL row (chunks cascade), its
+        locally stored file, and its Qdrant vectors.
+
+        Note: prior to Wave 5C this method did not clean up Qdrant
+        vectors, leaving them orphaned after a delete (Qdrant is a
+        separate system with no FK/cascade relationship to
+        PostgreSQL, unlike Chunk rows). Fixed here because GitHub
+        sync's deleted-file handling (Wave 5C) depends on this
+        actually removing all searchable state, not just the database
+        row - and the same fix benefits ordinary document deletion,
+        which had the identical gap.
+        """
         document = await self.document_repository.delete_for_owner(document_id, user_id)
         if document is None:
             return False
 
         local_storage.delete_file(document.storage_path)
+
+        try:
+            await self.vector_store.delete_document_chunks(document.id)
+        except QdrantIntegrationError:
+            # The PostgreSQL row and local file are already gone by this
+            # point, so there's nothing left to roll back - a transient
+            # Qdrant failure here shouldn't turn an otherwise-successful
+            # delete into an error for the caller (and, for GitHub sync,
+            # shouldn't abort reconciling the rest of the repository).
+            pass
+
         return True
 
     async def reindex_document_for_user(

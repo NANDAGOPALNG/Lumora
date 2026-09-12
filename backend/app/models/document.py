@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -24,7 +24,15 @@ class DocumentStatus(str, enum.Enum):
 
 
 class Document(Base):
-    """A document uploaded to a workspace, pending or completed chunking/indexing."""
+    """A document uploaded to a workspace, pending or completed chunking/indexing.
+
+    `connector_id` is set (non-NULL) for documents created by a connector
+    sync (e.g. GitHub, Wave 5C) and NULL for manually uploaded documents.
+    It's the authoritative way to scope connector-driven operations
+    (reconciling new/changed/deleted files) to only the documents that
+    connector actually owns - never another connector's, another
+    workspace's, or a manual upload's.
+    """
 
     __tablename__ = "documents"
 
@@ -35,6 +43,12 @@ class Document(Base):
         PG_UUID(as_uuid=True),
         ForeignKey("workspaces.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    connector_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("connectors.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
     filename: Mapped[str] = mapped_column(String, nullable=False)

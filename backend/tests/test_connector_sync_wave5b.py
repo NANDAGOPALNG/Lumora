@@ -1,5 +1,14 @@
-"""Focused tests for Wave 5B's sync orchestration:
-ConnectorService.sync_github and POST /api/v1/connectors/{id}/sync.
+"""Focused tests for the core sync orchestration introduced in Wave 5B
+and carried forward (with an updated signature/response shape) into
+Wave 5C: ConnectorService.sync_github and
+POST /api/v1/connectors/{id}/sync.
+
+Wave 5C-specific behavior (incremental new/changed/unchanged/deleted
+file handling, connector-scoped ownership, missing-repository
+handling) is covered separately in test_connector_sync_wave5c.py -
+this file focuses on the pipeline-integration, metadata-preservation,
+ownership, and token-safety properties that predate Wave 5C and still
+apply to it.
 
 Uses an in-memory SQLite database (PRAGMA foreign_keys=ON, matching
 PostgreSQL's FK enforcement) with the real User/Workspace/Connector/
@@ -162,7 +171,8 @@ async def _seed(session_factory):
         workspace_a = Workspace(id=uuid4(), user_id=user_a.id, name="WS-A")
         connector = Connector(
             id=uuid4(), workspace_id=workspace_a.id, type="github",
-            connection_name="octocat/Hello-World", active=True,
+            connection_name="octocat/Hello-World", github_repo="octocat/Hello-World",
+            active=True,
         )
         session.add_all([user_a, user_b, workspace_a, connector])
         await session.commit()
@@ -195,19 +205,23 @@ def test_sync_invokes_existing_ingestion_pipeline(monkeypatch):
             service = _make_connector_service(session, vector_store)
 
             summary = await service.sync_github(
-                connector_id=connector.id, user_id=user_a.id,
-                repo_full_name="octocat/Hello-World", github_token="ghp_secret",
+                connector_id=connector.id, user_id=user_a.id, github_token="ghp_secret",
             )
             await session.commit()
 
             assert summary.files_discovered == 2
-            assert summary.files_indexed == 2
+            assert summary.files_added == 2
+            assert summary.files_updated == 0
+            assert summary.files_deleted == 0
+            assert summary.files_unchanged == 0
             assert summary.files_skipped == 0
             assert summary.status == "completed"
+            assert summary.repository == "octocat/Hello-World"
 
             # the existing ingestion pipeline actually ran: real Document
-            # rows, in Indexed status, with real chunk counts, and real
-            # (fake-embedded) vectors handed to the vector store.
+            # rows, in Indexed status, with real chunk counts, connected to
+            # this connector, and real (fake-embedded) vectors handed to
+            # the vector store.
             documents = await DocumentRepository(session).get_by_workspace_owner(
                 workspace_a.id, user_a.id
             )
@@ -215,8 +229,15 @@ def test_sync_invokes_existing_ingestion_pipeline(monkeypatch):
             for document in documents:
                 assert document.status == DocumentStatus.INDEXED
                 assert document.chunk_count > 0
+                assert document.connector_id == connector.id
 
             assert len(vector_store.upserted) > 0
+
+            # last_synced was updated after a fully successful sync
+            refreshed = await ConnectorRepository(session).get_by_id_and_workspace_owner(
+                connector.id, user_a.id
+            )
+            assert refreshed.last_synced is not None
 
         await engine.dispose()
 
@@ -232,8 +253,7 @@ def test_github_source_metadata_is_preserved(monkeypatch):
         async with session_factory() as session:
             service = _make_connector_service(session, FakeVectorStore())
             await service.sync_github(
-                connector_id=connector.id, user_id=user_a.id,
-                repo_full_name="octocat/Hello-World", github_token="ghp_secret",
+                connector_id=connector.id, user_id=user_a.id, github_token="ghp_secret",
             )
             await session.commit()
 
@@ -241,6 +261,7 @@ def test_github_source_metadata_is_preserved(monkeypatch):
                 workspace_a.id, "README.md"
             )
             assert document is not None
+            assert document.connector_id == connector.id
 
             rows = await session.execute(
                 select(Chunk).where(Chunk.document_id == document.id)
@@ -279,8 +300,7 @@ def test_connector_ownership_is_enforced(monkeypatch):
 
             with pytest.raises(ConnectorNotFoundError):
                 await service.sync_github(
-                    connector_id=connector.id, user_id=user_b.id,
-                    repo_full_name="octocat/Hello-World", github_token="ghp_secret",
+                    connector_id=connector.id, user_id=user_b.id, github_token="ghp_secret",
                 )
 
             # nothing was ingested
@@ -288,6 +308,12 @@ def test_connector_ownership_is_enforced(monkeypatch):
                 connector.workspace_id
             )
             assert documents == []
+
+            # and last_synced was never touched
+            unchanged = await ConnectorRepository(session).get_by_id_and_workspace_owner(
+                connector.id, _user_a.id
+            )
+            assert unchanged.last_synced is None
 
         await engine.dispose()
 
@@ -312,8 +338,7 @@ def test_workspace_ownership_is_enforced_via_connector(monkeypatch):
             service = _make_connector_service(session, FakeVectorStore())
             with pytest.raises(ConnectorNotFoundError):
                 await service.sync_github(
-                    connector_id=connector.id, user_id=user_b.id,
-                    repo_full_name="octocat/Hello-World", github_token="ghp_secret",
+                    connector_id=connector.id, user_id=user_b.id, github_token="ghp_secret",
                 )
 
         await engine.dispose()
@@ -338,7 +363,7 @@ def test_connector_type_mismatch_is_rejected(monkeypatch):
             with pytest.raises(ConnectorTypeMismatchError):
                 await service.sync_github(
                     connector_id=non_github_connector.id, user_id=user_a.id,
-                    repo_full_name="octocat/Hello-World", github_token="ghp_secret",
+                    github_token="ghp_secret",
                 )
 
         await engine.dispose()
@@ -356,19 +381,21 @@ def test_repeated_sync_does_not_create_duplicate_documents(monkeypatch):
             service = _make_connector_service(session, FakeVectorStore())
 
             first = await service.sync_github(
-                connector_id=connector.id, user_id=user_a.id,
-                repo_full_name="octocat/Hello-World", github_token="ghp_secret",
+                connector_id=connector.id, user_id=user_a.id, github_token="ghp_secret",
             )
             await session.commit()
 
             second = await service.sync_github(
-                connector_id=connector.id, user_id=user_a.id,
-                repo_full_name="octocat/Hello-World", github_token="ghp_secret",
+                connector_id=connector.id, user_id=user_a.id, github_token="ghp_secret",
             )
             await session.commit()
 
-            assert first.files_indexed == 2
-            assert second.files_indexed == 2
+            assert first.files_added == 2
+            # nothing changed between the two syncs, so the second sync
+            # should find everything unchanged, not re-add or re-update it
+            assert second.files_added == 0
+            assert second.files_updated == 0
+            assert second.files_unchanged == 2
 
             documents = await DocumentRepository(session).get_by_workspace_owner(
                 workspace_a.id, user_a.id
@@ -427,30 +454,42 @@ def test_router_sync_endpoint_and_token_never_leaks(monkeypatch):
         client = TestClient(main.app)
         secret_token = "ghp_super_secret_value_12345"
 
+        # Wave 5C: the request no longer accepts repo_full_name at all -
+        # only the credential.
         resp = client.post(f"/api/v1/connectors/{connector.id}/sync", json={
-            "repo_full_name": "octocat/Hello-World",
             "github_token": secret_token,
         })
         assert resp.status_code == 200
         body = resp.json()
         assert set(body.keys()) == {
-            "connector_id", "repository", "files_discovered",
-            "files_indexed", "files_skipped", "status",
+            "connector_id", "repository", "files_discovered", "files_added",
+            "files_updated", "files_deleted", "files_unchanged", "files_skipped",
+            "status",
         }
         assert body["connector_id"] == str(connector.id)
         assert body["repository"] == "octocat/Hello-World"
         assert body["files_discovered"] == 2
-        assert body["files_indexed"] == 2
+        assert body["files_added"] == 2
         assert body["files_skipped"] == 0
         assert body["status"] == "completed"
         # the token never appears anywhere in the response
         assert secret_token not in resp.text
         assert "github_token" not in resp.text
 
+        # a client can no longer smuggle a different repository into the
+        # sync request - repo_full_name is not even part of the schema
+        # anymore, so FastAPI/Pydantic simply ignores an extra field like
+        # this rather than erroring, but it has zero effect either way.
+        smuggle_resp = client.post(f"/api/v1/connectors/{connector.id}/sync", json={
+            "github_token": secret_token,
+            "repo_full_name": "someone-else/other-repo",
+        })
+        assert smuggle_resp.status_code == 200
+        assert smuggle_resp.json()["repository"] == "octocat/Hello-World"
+
         # another user cannot sync this connector
         current_user_holder["user"] = user_b
         cross_resp = client.post(f"/api/v1/connectors/{connector.id}/sync", json={
-            "repo_full_name": "octocat/Hello-World",
             "github_token": secret_token,
         })
         assert cross_resp.status_code == 404

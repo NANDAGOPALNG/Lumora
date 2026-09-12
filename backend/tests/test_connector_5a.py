@@ -123,6 +123,7 @@ def test_valid_credentials_and_repository_create_and_persist_connector(monkeypat
 
             assert connector.type == "github"
             assert connector.connection_name == "octocat/Hello-World"
+            assert connector.github_repo == "octocat/Hello-World"
             assert connector.active is True
 
             fetched = await ConnectorRepository(session).get_by_id_and_workspace_owner(
@@ -276,8 +277,10 @@ def test_router_end_to_end_and_credentials_never_leak(monkeypatch):
         assert create_resp.status_code == 201
         body = create_resp.json()
         assert set(body.keys()) == {
-            "id", "workspace_id", "type", "connection_name", "last_synced", "active",
+            "id", "workspace_id", "type", "connection_name", "github_repo",
+            "last_synced", "active",
         }
+        assert body["github_repo"] == "octocat/Hello-World"
         assert secret_token not in create_resp.text
         connector_id = body["id"]
 

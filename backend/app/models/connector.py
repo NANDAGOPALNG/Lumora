@@ -16,6 +16,14 @@ class Connector(Base):
     """An external data-source connection configured for a workspace.
 
     Supported types (per the DDD): GitHub, Google Drive, Notion.
+
+    `github_repo` stores the canonical, non-secret repository identity
+    ("owner/repo") for GitHub connectors - the server's source of truth
+    for which repository a sync operates against, independent of
+    `connection_name` (a free-text display label that a caller may set
+    to anything and that later sync requests must not be trusted to
+    resolve back to a real repository). Unused (NULL) for non-GitHub
+    connector types. Never holds a credential.
     """
 
     __tablename__ = "connectors"
@@ -31,6 +39,7 @@ class Connector(Base):
     )
     type: Mapped[str] = mapped_column(String(50), nullable=False)
     connection_name: Mapped[str] = mapped_column(String, nullable=False)
+    github_repo: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     last_synced: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

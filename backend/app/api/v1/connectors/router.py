@@ -8,9 +8,11 @@ Implements, per the API specification's Connector APIs section:
   the current user (workspace_id is a required query parameter).
 * DELETE /api/v1/connectors/{connector_id} - delete a connector owned
   by the current user.
-* POST /api/v1/connectors/{connector_id}/sync - fetch and index a
-  connected GitHub repository's supported files through the existing
-  document ingestion pipeline (Wave 5B).
+* POST /api/v1/connectors/{connector_id}/sync - incrementally
+  reconcile a connected GitHub repository (the one stored on the
+  connector itself, not a client-supplied one) against Lumora's
+  existing documents for it, through the existing document ingestion
+  pipeline (Wave 5C).
 
 Google Drive and Notion connectors (also listed in the API
 specification) are not implemented in this wave.
@@ -54,6 +56,7 @@ from app.schemas.connector import (
     GitHubSyncResponse,
 )
 from app.services.connector_service import (
+    ConnectorMissingRepositoryError,
     ConnectorNotFoundError,
     ConnectorService,
     ConnectorTypeMismatchError,
@@ -167,7 +170,6 @@ async def sync_github_connector(
         summary = await connector_service.sync_github(
             connector_id=connector_id,
             user_id=current_user.id,
-            repo_full_name=payload.repo_full_name,
             github_token=payload.github_token,
         )
     except ConnectorNotFoundError:
@@ -176,6 +178,11 @@ async def sync_github_connector(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "UNSUPPORTED_CONNECTOR_TYPE", "message": str(exc)},
+        )
+    except ConnectorMissingRepositoryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "CONNECTOR_MISSING_REPOSITORY", "message": str(exc)},
         )
     except ConnectorAuthenticationError as exc:
         raise HTTPException(

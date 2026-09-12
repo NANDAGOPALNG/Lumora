@@ -6,30 +6,43 @@ the Connector record), listing a workspace's connectors, retrieving
 one, and deleting one.
 
 Wave 5B: `sync_github()` - fetching a GitHub repository's supported
-files (via GitHubConnector.sync()) and feeding each one through the
-*existing* DocumentService pipeline (upload_document ->
-reindex_document_for_user - the same two calls an ordinary file
-upload goes through). This method contains no chunking, embedding, or
-Qdrant logic of its own; it only calls DocumentService, exactly as an
-API route would, plus the small amount of orchestration (matching an
-already-synced file back to its existing Document row, so re-syncing
-doesn't create a duplicate) that doesn't belong inside DocumentService
-itself.
+files and feeding each one through the *existing* DocumentService
+pipeline (upload_document -> reindex_document_for_user - the same two
+calls an ordinary file upload goes through).
+
+Wave 5C: `sync_github()` is now incremental and connector-scoped:
+- the repository synced is the one stored on the Connector itself
+  (`connector.github_repo`), never a client-supplied value (closing
+  the repository-confusion gap Wave 5B's report flagged);
+- new files are ingested, changed files (by GitHub blob SHA) are
+  refetched and reindexed in place, unchanged files are skipped
+  without being refetched, and files removed from the repository have
+  their corresponding Document (and its chunks/local file/Qdrant
+  vectors) removed - all four cases via the existing DocumentService
+  pipeline, never a GitHub-specific parallel one.
+
+This service contains no chunking, embedding, Qdrant, or GitHub-HTTP
+logic of its own; it only calls DocumentService/GitHubConnector,
+exactly as an API route would, plus the small amount of orchestration
+(matching discovered files to the Documents this connector already
+owns) that doesn't belong inside either of those.
 
 Ownership is enforced at the repository/query level throughout (see
-ConnectorRepository, WorkspaceRepository) - this service never fetches
-a row and checks `.workspace_id`/`.user_id` itself in Python.
+ConnectorRepository, WorkspaceRepository, DocumentRepository) - this
+service never fetches a row and checks `.workspace_id`/`.user_id`/
+`.connector_id` itself in Python.
 """
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 from uuid import UUID
 
 from app.config.settings import Settings
 from app.connectors.base import ConnectorAuthenticationError, ConnectorResourceNotFoundError
 from app.connectors.github_connector import GitHubConnector, GitHubFile
 from app.models.connector import Connector
+from app.models.document import Document
 from app.repositories.connector_repository import ConnectorRepository
 from app.repositories.workspace_repository import WorkspaceRepository
 from app.services.document_service import (
@@ -49,6 +62,7 @@ __all__ = [
     "ConnectorWorkspaceNotFoundError",
     "ConnectorNotFoundError",
     "ConnectorTypeMismatchError",
+    "ConnectorMissingRepositoryError",
     "ConnectorAuthenticationError",
     "ConnectorResourceNotFoundError",
     "GitHubSyncSummary",
@@ -80,6 +94,15 @@ class ConnectorTypeMismatchError(Exception):
     """
 
 
+class ConnectorMissingRepositoryError(Exception):
+    """Raised when a GitHub connector has no stored `github_repo` to
+    sync - expected only for a connector created before Wave 5C's
+    migration (which backfills existing rows with NULL, not a real
+    repository); reconnecting recreates the connector with
+    `github_repo` populated.
+    """
+
+
 @dataclass
 class GitHubSyncSummary:
     """The outcome of one `sync_github()` call - safe to return
@@ -90,7 +113,10 @@ class GitHubSyncSummary:
     connector_id: UUID
     repository: str
     files_discovered: int
-    files_indexed: int
+    files_added: int
+    files_updated: int
+    files_deleted: int
+    files_unchanged: int
     files_skipped: int
     status: str
 
@@ -127,6 +153,15 @@ class ConnectorService:
         """Validate workspace ownership and GitHub access, then
         create and persist a Connector record for `repo_full_name`.
 
+        The Connector's `github_repo` (the server's source of truth for
+        which repository this connector syncs - see `sync_github`) is
+        set from GitHub's own canonical `full_name` for the repository,
+        as returned by GitHubConnector.connect() - not the raw,
+        possibly differently-cased client input - while
+        `connection_name` remains a separate, purely cosmetic display
+        label (defaulting to the same canonical name if the caller
+        doesn't supply one).
+
         Raises:
             ConnectorWorkspaceNotFoundError: `workspace_id` doesn't
                 exist or doesn't belong to `user_id`.
@@ -149,11 +184,13 @@ class ConnectorService:
         # Raises ConnectorAuthenticationError / ConnectorResourceNotFoundError
         # on failure - not caught here, so the router sees them directly.
         repo_info = await github_connector.connect()
+        canonical_repo = repo_info["full_name"]
 
         connector = Connector(
             workspace_id=workspace_id,
             type="github",
-            connection_name=connection_name or repo_info["full_name"],
+            connection_name=connection_name or canonical_repo,
+            github_repo=canonical_repo,
             active=True,
         )
         return await self.connector_repository.create(connector)
@@ -196,6 +233,13 @@ class ConnectorService:
 
         Raises ConnectorNotFoundError if `connector_id` doesn't exist
         or its workspace doesn't belong to `user_id`.
+
+        Note: this does not delete the connector's previously-synced
+        Documents (Document.connector_id is set to NULL via the
+        migration's ON DELETE SET NULL, so they simply become
+        unowned/orphaned from any connector, like a manual upload) -
+        that's an intentional, conservative choice preserved from
+        before Wave 5C, out of scope for this wave to change.
         """
         deleted = await self.connector_repository.delete_for_owner(
             connector_id, user_id
@@ -207,45 +251,62 @@ class ConnectorService:
         self,
         connector_id: UUID,
         user_id: UUID,
-        repo_full_name: str,
         github_token: str,
     ) -> GitHubSyncSummary:
-        """Fetch and index every supported file in a GitHub connector's
-        repository through the existing DocumentService pipeline, then
-        record when this sync happened.
+        """Incrementally reconcile a GitHub connector's repository
+        against Lumora's existing documents for it, through the
+        existing DocumentService pipeline.
 
-        `repo_full_name` and `github_token` are both request-provided
-        for this wave: Wave 5A already established that the token is
-        never persisted (Connector has no credential field), and the
-        connector's own `connection_name` isn't a reliable place to
-        recover the repository identifier either, since a caller may
-        have set it to an arbitrary display label at connect time (see
-        this method's note in the Wave 5B report on why this is a
-        Wave 5C architectural item, not something patched around here).
+        The repository synced is always `connector.github_repo` - the
+        server's own stored record - never a client-supplied value.
+        `github_token` remains request-provided (Wave 5A/5B already
+        established the Connector model has no credential field) and
+        is never persisted, logged, or returned.
 
-        Order of operations, matching the existing
-        DocumentService.reindex_document_for_user's own all-or-nothing
-        approach per file: one failing file (fetch, parse, or index)
-        is skipped and counted, never allowed to abort the rest of the
-        sync.
+        Algorithm:
+        1. Load the connector, scoped to `user_id`, and confirm it's a
+           GitHub connector with a stored repository.
+        2. Authenticate with GitHub and discover the repository's
+           current supported files and their blob SHAs
+           (GitHubConnector.sync() - this already both discovers and
+           fetches; see the per-file handling below for why an
+           unchanged file's already-fetched content is simply
+           discarded rather than being fetched separately per file).
+        3. Load the Documents this connector already owns
+           (DocumentRepository.get_by_connector - never workspace_id +
+           filename alone, which can't tell this connector's documents
+           apart from another connector's, another repository's, or a
+           manual upload's).
+        4. For each currently discovered file: if no existing Document
+           matches its path, ingest it as new; if one does and its
+           stored GitHub SHA differs from the current one, refetch and
+           reindex it in place; if the SHA matches, skip it untouched.
+        5. For each existing Document owned by this connector whose
+           path is no longer discovered, delete it via
+           DocumentService.delete_document_for_user - which removes
+           its PostgreSQL row (chunks cascade), local file, and Qdrant
+           vectors.
+        6. Only now, with reconciliation complete, update
+           `connector.last_synced`.
 
-        Idempotency: a file already represented by a Document in this
-        workspace (matched by filename, which holds the GitHub path)
-        has its stored content overwritten and is reindexed under its
-        existing document_id, rather than a new Document being
-        created - DocumentService.reindex_document_for_user's existing
-        replace-not-append chunk/Qdrant logic is what actually keeps
-        re-syncing from producing duplicate/stale search results, not
-        any new logic here.
+        One file's fetch/parse/index failure is counted (files_skipped)
+        rather than aborting the rest of the sync, matching Wave 5B's
+        existing behavior. If GitHub itself can't be authenticated or
+        the repository can't be reached at all, nothing is reconciled
+        and `last_synced` is left unchanged - the exception propagates
+        to the caller directly.
 
         Raises:
             ConnectorNotFoundError: `connector_id` doesn't exist or
                 its workspace doesn't belong to `user_id`.
             ConnectorTypeMismatchError: the connector isn't a GitHub
                 connector.
+            ConnectorMissingRepositoryError: the connector has no
+                stored `github_repo` (only possible for a connector
+                created before Wave 5C - reconnect it).
             ConnectorAuthenticationError / ConnectorResourceNotFoundError:
-                from GitHubConnector.connect(), if `github_token` or
-                `repo_full_name` isn't valid/accessible.
+                from GitHubConnector.connect(), if `github_token` isn't
+                valid or the stored repository is no longer accessible.
         """
         connector = await self.connector_repository.get_by_id_and_workspace_owner(
             connector_id, user_id
@@ -256,54 +317,110 @@ class ConnectorService:
             raise ConnectorTypeMismatchError(
                 f"Connector {connector_id} is not a GitHub connector"
             )
+        if not connector.github_repo:
+            raise ConnectorMissingRepositoryError(
+                f"Connector {connector_id} has no stored repository - reconnect it"
+            )
 
         max_file_size_bytes = Settings.get_instance().max_document_size_bytes
         github_connector = GitHubConnector(
             token=github_token,
-            repo_full_name=repo_full_name,
+            repo_full_name=connector.github_repo,
             max_file_size_bytes=max_file_size_bytes,
         )
         # Raises ConnectorAuthenticationError / ConnectorResourceNotFoundError
         # on failure - not caught here, so the router sees them directly,
-        # and nothing is persisted/ingested if the repository itself can't
-        # be reached at all.
+        # and nothing is reconciled/last_synced is left unchanged if the
+        # repository itself can't be reached at all.
         fetch_result = await github_connector.sync()
 
-        files_indexed = 0
+        document_repository = self.document_service.document_repository
+        existing_documents = await document_repository.get_by_connector(connector.id)
+        existing_by_path: Dict[str, Document] = {
+            document.filename: document for document in existing_documents
+        }
+
+        discovered_paths = set()
+        files_added = 0
+        files_updated = 0
+        files_unchanged = 0
         files_skipped = fetch_result.fetch_failures
 
         for github_file in fetch_result.files:
-            indexed = await self._ingest_github_file(connector, user_id, github_file)
-            if indexed:
-                files_indexed += 1
+            discovered_paths.add(github_file.path)
+            existing_document = existing_by_path.get(github_file.path)
+
+            if existing_document is None:
+                ingested = await self._ingest_github_file(
+                    connector, user_id, github_file, existing_document_id=None
+                )
+                if ingested:
+                    files_added += 1
+                else:
+                    files_skipped += 1
+                continue
+
+            stored_metadata = await self.document_service.chunk_repository.get_metadata_sample(
+                existing_document.id
+            )
+            stored_sha = (stored_metadata or {}).get("github_sha")
+
+            if stored_sha == github_file.sha:
+                files_unchanged += 1
+                continue
+
+            ingested = await self._ingest_github_file(
+                connector, user_id, github_file, existing_document_id=existing_document.id
+            )
+            if ingested:
+                files_updated += 1
             else:
                 files_skipped += 1
+
+        files_deleted = 0
+        for path, document in existing_by_path.items():
+            if path in discovered_paths:
+                continue
+            deleted = await self.document_service.delete_document_for_user(document.id, user_id)
+            if deleted:
+                files_deleted += 1
 
         connector.last_synced = datetime.now(timezone.utc)
         await self.connector_repository.session.flush()
 
         return GitHubSyncSummary(
             connector_id=connector.id,
-            repository=repo_full_name,
+            repository=connector.github_repo,
             files_discovered=fetch_result.discovered_count,
-            files_indexed=files_indexed,
+            files_added=files_added,
+            files_updated=files_updated,
+            files_deleted=files_deleted,
+            files_unchanged=files_unchanged,
             files_skipped=files_skipped,
             status="completed",
         )
 
     async def _ingest_github_file(
-        self, connector: Connector, user_id: UUID, github_file: GitHubFile
+        self,
+        connector: Connector,
+        user_id: UUID,
+        github_file: GitHubFile,
+        *,
+        existing_document_id: Optional[UUID],
     ) -> bool:
         """Ingest one already-fetched GitHub file through DocumentService,
         returning True if it was successfully indexed.
 
-        Reuses an existing Document (matched by workspace_id + filename,
-        where filename holds the repo-relative path) instead of creating
-        a new one when this file was already synced before, by
-        overwriting its stored content in place at the same
-        storage_path (via the same app.storage.local_storage module
-        DocumentService.upload_document already uses) and reindexing
-        under the same document_id.
+        `existing_document_id`, when given, is the Document this
+        connector already owns for this path (a changed file - see
+        `sync_github`): its stored content is overwritten in place at
+        its existing storage_path (via the same app.storage.local_storage
+        module DocumentService.upload_document already uses) and it's
+        reindexed under the same document_id, rather than a new Document
+        being created. When None (a new file), a new Document is created
+        via DocumentService.upload_document with `connector_id` set to
+        this connector, so future syncs can find it via
+        DocumentRepository.get_by_connector.
         """
         document_repository = self.document_service.document_repository
 
@@ -317,11 +434,12 @@ class ConnectorService:
             "github_sha": github_file.sha,
         }
 
-        existing = await document_repository.get_by_workspace_and_filename(
-            connector.workspace_id, github_file.path
-        )
-
-        if existing is not None:
+        if existing_document_id is not None:
+            existing = await document_repository.get_by_id_and_workspace_owner(
+                existing_document_id, user_id
+            )
+            if existing is None:
+                return False
             local_storage.save_file(existing.storage_path, github_file.content)
             await document_repository.update_for_owner(
                 existing.id, user_id, {"file_size": len(github_file.content)}
@@ -335,6 +453,7 @@ class ConnectorService:
                     filename=github_file.path,
                     content_type=None,
                     content=github_file.content,
+                    connector_id=connector.id,
                 )
             except (UnsupportedFileTypeError, FileTooLargeError):
                 return False
