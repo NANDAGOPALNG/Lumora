@@ -23,7 +23,20 @@ class Connector(Base):
     `connection_name` (a free-text display label that a caller may set
     to anything and that later sync requests must not be trusted to
     resolve back to a real repository). Unused (NULL) for non-GitHub
-    connector types. Never holds a credential.
+    connector types.
+
+    `drive_account_email` and `drive_root_folder_id` are the Google
+    Drive analogue, added in Wave 6A: the Drive account identity and
+    (optional) root folder scope this connector was validated against,
+    both returned by Google's API itself (GoogleDriveConnector.connect()),
+    not client-supplied free text. Unused (NULL) for non-Google-Drive
+    connector types, and `drive_root_folder_id` is also NULL for a
+    Google Drive connector scoped to the whole Drive rather than one
+    folder.
+
+    Never holds a credential - no column on this model stores an
+    access token, refresh token, or client secret for any connector
+    type.
     """
 
     __tablename__ = "connectors"
@@ -40,6 +53,8 @@ class Connector(Base):
     type: Mapped[str] = mapped_column(String(50), nullable=False)
     connection_name: Mapped[str] = mapped_column(String, nullable=False)
     github_repo: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    drive_account_email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    drive_root_folder_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     last_synced: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

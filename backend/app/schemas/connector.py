@@ -54,6 +54,39 @@ class GitHubConnectorCreate(BaseModel):
         return _validate_repo_full_name(value)
 
 
+class GoogleDriveConnectorCreate(BaseModel):
+    """Request body for POST /api/v1/connectors/google-drive.
+
+    `access_token` is a Google Drive OAuth access token, used only to
+    validate the connection at connect time - it is never persisted
+    (the Connector model has no credential storage field for it,
+    mirroring `GitHubConnectorCreate.github_token`) and never appears
+    in any response. Obtaining this token (the OAuth consent/callback
+    flow itself) is out of scope for this wave - see
+    GoogleDriveConnector's module docstring.
+
+    `root_folder_id`, if given, scopes this connector to that single
+    Drive folder rather than the whole Drive; it's Drive's own opaque
+    file ID for the folder (not a path), validated by
+    GoogleDriveConnector.connect().
+    """
+
+    workspace_id: UUID = Field(
+        ..., description="ID of the workspace to attach this connector to"
+    )
+    access_token: str = Field(
+        ..., description="Google Drive OAuth access token used to validate access; never stored"
+    )
+    root_folder_id: Optional[str] = Field(
+        default=None,
+        description="Optional Drive folder ID to scope this connector to; omit for the whole Drive",
+    )
+    connection_name: Optional[str] = Field(
+        default=None,
+        description="Optional display name for this connector; defaults to the connected Drive account's email",
+    )
+
+
 class ConnectorResponse(BaseModel):
     """Safe connector metadata - never includes any credential.
 
@@ -61,6 +94,12 @@ class ConnectorResponse(BaseModel):
     this connector syncs (NULL for non-GitHub connectors, and for a
     GitHub connector created before Wave 5C that hasn't been
     reconnected yet) - not sensitive, safe to return.
+
+    `drive_account_email` and `drive_root_folder_id` are the Google
+    Drive analogue (Wave 6A) - NULL for non-Google-Drive connectors,
+    and `drive_root_folder_id` is also NULL for a Google Drive
+    connector scoped to the whole Drive rather than one folder. Never
+    an access or refresh token.
     """
 
     id: UUID
@@ -68,6 +107,8 @@ class ConnectorResponse(BaseModel):
     type: str
     connection_name: str
     github_repo: Optional[str] = None
+    drive_account_email: Optional[str] = None
+    drive_root_folder_id: Optional[str] = None
     last_synced: Optional[datetime] = None
     active: bool
 

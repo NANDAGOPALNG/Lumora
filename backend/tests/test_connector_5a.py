@@ -276,8 +276,12 @@ def test_router_end_to_end_and_credentials_never_leak(monkeypatch):
         })
         assert create_resp.status_code == 201
         body = create_resp.json()
+        # Wave 6A adds drive_account_email/drive_root_folder_id to
+        # ConnectorResponse (NULL for this GitHub connector) - see
+        # app/schemas/connector.py.
         assert set(body.keys()) == {
             "id", "workspace_id", "type", "connection_name", "github_repo",
+            "drive_account_email", "drive_root_folder_id",
             "last_synced", "active",
         }
         assert body["github_repo"] == "octocat/Hello-World"

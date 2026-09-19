@@ -41,6 +41,7 @@ from uuid import UUID
 from app.config.settings import Settings
 from app.connectors.base import ConnectorAuthenticationError, ConnectorResourceNotFoundError
 from app.connectors.github_connector import GitHubConnector, GitHubFile
+from app.connectors.google_drive_connector import GoogleDriveConnector, GoogleDriveFile
 from app.models.connector import Connector
 from app.models.document import Document
 from app.repositories.connector_repository import ConnectorRepository
@@ -194,6 +195,106 @@ class ConnectorService:
             active=True,
         )
         return await self.connector_repository.create(connector)
+
+    async def connect_google_drive(
+        self,
+        user_id: UUID,
+        workspace_id: UUID,
+        access_token: str,
+        root_folder_id: Optional[str] = None,
+        connection_name: Optional[str] = None,
+    ) -> Connector:
+        """Validate workspace ownership and Google Drive access, then
+        create and persist a Connector record for this Drive scope.
+
+        Mirrors `connect_github` above: the Connector's
+        `drive_account_email` (and `drive_root_folder_id`, if a folder
+        scope was given) is set from Google's own API response (via
+        GoogleDriveConnector.connect()), not blindly trusted from
+        client input beyond what that call itself validated.
+        `connection_name` remains a separate, purely cosmetic display
+        label (defaulting to the connected account's email if the
+        caller doesn't supply one).
+
+        Raises:
+            ConnectorWorkspaceNotFoundError: `workspace_id` doesn't
+                exist or doesn't belong to `user_id`.
+            ConnectorAuthenticationError: `access_token` is missing,
+                invalid, or expired.
+            ConnectorResourceNotFoundError: `root_folder_id` was given
+                but doesn't exist, isn't accessible with `access_token`,
+                or isn't a folder.
+        """
+        workspace = await self.workspace_repository.get_by_id_and_user(
+            workspace_id, user_id
+        )
+        if workspace is None:
+            raise ConnectorWorkspaceNotFoundError(
+                f"Workspace {workspace_id} was not found"
+            )
+
+        google_drive_connector = GoogleDriveConnector(
+            access_token=access_token, root_folder_id=root_folder_id
+        )
+        # Raises ConnectorAuthenticationError / ConnectorResourceNotFoundError
+        # on failure - not caught here, so the router sees them directly.
+        connection_info = await google_drive_connector.connect()
+        account_email = connection_info["account_email"]
+        validated_root_folder_id = connection_info["root_folder_id"]
+
+        connector = Connector(
+            workspace_id=workspace_id,
+            type="google_drive",
+            connection_name=connection_name or account_email or "Google Drive",
+            drive_account_email=account_email,
+            drive_root_folder_id=validated_root_folder_id,
+            active=True,
+        )
+        return await self.connector_repository.create(connector)
+
+    async def discover_google_drive_files(
+        self,
+        connector_id: UUID,
+        user_id: UUID,
+        access_token: str,
+    ) -> List[GoogleDriveFile]:
+        """List the file/folder metadata directly within an existing
+        Google Drive connector's scope - foundation-only discovery, no
+        content fetched (see GoogleDriveConnector.discover_files()).
+
+        Not wired to a router endpoint in Wave 6A (the API
+        specification's Connector APIs section has no discovery route
+        for this wave) - exposed here so Wave 6B's sync can reuse it
+        and so it's reachable for testing against a real connector
+        row, the same way GitHubConnector.discover_files() existed
+        before GitHubConnector.sync() first called it.
+
+        Raises:
+            ConnectorNotFoundError: `connector_id` doesn't exist or its
+                workspace doesn't belong to `user_id`.
+            ConnectorTypeMismatchError: the connector isn't a Google
+                Drive connector.
+            ConnectorAuthenticationError / ConnectorResourceNotFoundError:
+                from GoogleDriveConnector.connect()/discover_files(), if
+                `access_token` isn't valid or the stored scope is no
+                longer accessible.
+        """
+        connector = await self.connector_repository.get_by_id_and_workspace_owner(
+            connector_id, user_id
+        )
+        if connector is None:
+            raise ConnectorNotFoundError(f"Connector {connector_id} was not found")
+        if connector.type != "google_drive":
+            raise ConnectorTypeMismatchError(
+                f"Connector {connector_id} is not a Google Drive connector"
+            )
+
+        google_drive_connector = GoogleDriveConnector(
+            access_token=access_token,
+            root_folder_id=connector.drive_root_folder_id,
+        )
+        await google_drive_connector.connect()
+        return await google_drive_connector.discover_files()
 
     async def list_connectors_for_workspace(
         self, workspace_id: UUID, user_id: UUID

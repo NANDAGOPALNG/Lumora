@@ -4,6 +4,9 @@ Connector API routes.
 Implements, per the API specification's Connector APIs section:
 * POST /api/v1/connectors/github - create a GitHub connector for a
   workspace, validating the supplied token and repository first.
+* POST /api/v1/connectors/google-drive - create a Google Drive
+  connector for a workspace, validating the supplied OAuth access
+  token (and optional root folder scope) first (Wave 6A).
 * GET /api/v1/connectors - list connectors for a workspace owned by
   the current user (workspace_id is a required query parameter).
 * DELETE /api/v1/connectors/{connector_id} - delete a connector owned
@@ -14,8 +17,12 @@ Implements, per the API specification's Connector APIs section:
   existing documents for it, through the existing document ingestion
   pipeline (Wave 5C).
 
-Google Drive and Notion connectors (also listed in the API
-specification) are not implemented in this wave.
+Notion connectors (also listed in the API specification) are not
+implemented in this wave. Google Drive file discovery beyond
+connect-time validation, and any sync/ingestion for either connector
+type's Drive files, are Wave 6B/6C work - see
+app/connectors/google_drive_connector.py and
+ConnectorService.discover_google_drive_files.
 
 Every route requires an authenticated user (`get_current_user`).
 Ownership is enforced by ConnectorService/ConnectorRepository at the
@@ -24,14 +31,15 @@ between HTTP and ConnectorService, and maps
 ConnectorWorkspaceNotFoundError / ConnectorNotFoundError /
 ConnectorTypeMismatchError / ConnectorAuthenticationError /
 ConnectorResourceNotFoundError onto the appropriate HTTP responses. It
-performs no database queries, GitHub API calls, or ingestion logic of
-its own.
+performs no database queries, GitHub/Google Drive API calls, or
+ingestion logic of its own.
 
 The GitHub token in POST /connectors/github's and
-POST /connectors/{id}/sync's request bodies is used only to validate
-access / authenticate the sync; it is never persisted, logged, or
-included in any response - ConnectorResponse/GitHubSyncResponse expose
-only safe metadata.
+POST /connectors/{id}/sync's request bodies, and the Google Drive
+OAuth access token in POST /connectors/google-drive's request body,
+are used only to validate access / authenticate the sync; neither is
+ever persisted, logged, or included in any response -
+ConnectorResponse/GitHubSyncResponse expose only safe metadata.
 """
 
 from typing import List
@@ -54,6 +62,7 @@ from app.schemas.connector import (
     GitHubConnectorCreate,
     GitHubSyncRequest,
     GitHubSyncResponse,
+    GoogleDriveConnectorCreate,
 )
 from app.services.connector_service import (
     ConnectorMissingRepositoryError,
@@ -124,6 +133,38 @@ async def create_github_connector(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "GITHUB_REPOSITORY_NOT_FOUND", "message": str(exc)},
+        )
+
+    return ConnectorResponse.model_validate(connector)
+
+
+@router.post(
+    "/google-drive", response_model=ConnectorResponse, status_code=status.HTTP_201_CREATED
+)
+async def create_google_drive_connector(
+    payload: GoogleDriveConnectorCreate,
+    current_user: User = Depends(get_current_user),
+    connector_service: ConnectorService = Depends(get_connector_service),
+) -> ConnectorResponse:
+    try:
+        connector = await connector_service.connect_google_drive(
+            user_id=current_user.id,
+            workspace_id=payload.workspace_id,
+            access_token=payload.access_token,
+            root_folder_id=payload.root_folder_id,
+            connection_name=payload.connection_name,
+        )
+    except ConnectorWorkspaceNotFoundError:
+        raise _workspace_not_found()
+    except ConnectorAuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_GOOGLE_DRIVE_CREDENTIALS", "message": str(exc)},
+        )
+    except ConnectorResourceNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "GOOGLE_DRIVE_RESOURCE_NOT_FOUND", "message": str(exc)},
         )
 
     return ConnectorResponse.model_validate(connector)
