@@ -21,11 +21,26 @@ Wave 5C: `sync_github()` is now incremental and connector-scoped:
   vectors) removed - all four cases via the existing DocumentService
   pipeline, never a GitHub-specific parallel one.
 
-This service contains no chunking, embedding, Qdrant, or GitHub-HTTP
-logic of its own; it only calls DocumentService/GitHubConnector,
-exactly as an API route would, plus the small amount of orchestration
-(matching discovered files to the Documents this connector already
-owns) that doesn't belong inside either of those.
+Wave 6A: `connect_google_drive()` (validating workspace ownership and
+Drive access via GoogleDriveConnector, then persisting a Connector
+record for that scope) and `discover_google_drive_files()` (listing a
+connector's scope, foundation-only - no content fetched).
+
+Wave 6B: `sync_google_drive()` - full (non-incremental) ingestion of a
+Google Drive connector's discovered files, feeding each one through
+the same *existing* DocumentService pipeline GitHub sync uses
+(upload_document -> reindex_document_for_user), with Drive file
+identity (`Document.source_id`, not filename - see the Document
+model's docstring) as duplicate-import protection. Detecting changes
+to an already-imported file and removing Documents for files deleted
+from Drive are Wave 6C work, mirroring what Wave 5C added for GitHub.
+
+This service contains no chunking, embedding, Qdrant, or GitHub/Drive
+HTTP logic of its own; it only calls
+DocumentService/GitHubConnector/GoogleDriveConnector, exactly as an
+API route would, plus the small amount of orchestration (matching
+discovered files to the Documents this connector already owns) that
+doesn't belong inside either of those.
 
 Ownership is enforced at the repository/query level throughout (see
 ConnectorRepository, WorkspaceRepository, DocumentRepository) - this
@@ -41,7 +56,11 @@ from uuid import UUID
 from app.config.settings import Settings
 from app.connectors.base import ConnectorAuthenticationError, ConnectorResourceNotFoundError
 from app.connectors.github_connector import GitHubConnector, GitHubFile
-from app.connectors.google_drive_connector import GoogleDriveConnector, GoogleDriveFile
+from app.connectors.google_drive_connector import (
+    GoogleDriveConnector,
+    GoogleDriveFetchedFile,
+    GoogleDriveFile,
+)
 from app.models.connector import Connector
 from app.models.document import Document
 from app.repositories.connector_repository import ConnectorRepository
@@ -67,6 +86,7 @@ __all__ = [
     "ConnectorAuthenticationError",
     "ConnectorResourceNotFoundError",
     "GitHubSyncSummary",
+    "GoogleDriveSyncSummary",
 ]
 
 
@@ -120,6 +140,25 @@ class GitHubSyncSummary:
     files_unchanged: int
     files_skipped: int
     status: str
+
+
+@dataclass
+class GoogleDriveSyncSummary:
+    """The outcome of one `sync_google_drive()` call - safe to return
+    directly from the API (see GoogleDriveSyncResponse): no credential,
+    and nothing beyond simple counts, identifiers, and short,
+    non-secret notes about why individual files were skipped or
+    failed.
+    """
+
+    connector_id: UUID
+    files_discovered: int
+    files_imported: int
+    files_unchanged: int
+    files_skipped: int
+    files_failed: int
+    status: str
+    notes: List[str]
 
 
 class ConnectorService:
@@ -295,6 +334,195 @@ class ConnectorService:
         )
         await google_drive_connector.connect()
         return await google_drive_connector.discover_files()
+
+    async def sync_google_drive(
+        self,
+        connector_id: UUID,
+        user_id: UUID,
+        access_token: str,
+    ) -> GoogleDriveSyncSummary:
+        """Full (non-incremental) ingestion of a Google Drive
+        connector's discovered files into Lumora's existing document
+        pipeline.
+
+        Wave 6B only: every discovered, supported file not already
+        imported for this connector is fetched and ingested; a file
+        already imported (matched by `connector_id` + Drive file ID -
+        see `Document.source_id`) is left untouched rather than
+        refetched/reindexed - detecting and applying *changes* to an
+        already-imported file (mirroring GitHub's Wave 5C SHA
+        comparison) and removing Documents for files deleted from
+        Drive are both Wave 6C work, not this method's.
+
+        `access_token` remains request-provided (mirroring
+        `connect_google_drive`) and is never persisted, logged, or
+        returned - and never enters Document or chunk metadata either
+        (only the Drive file's own non-secret identity/URL does, via
+        `_ingest_google_drive_file`).
+
+        Algorithm:
+        1. Load the connector, scoped to `user_id`, and confirm it's a
+           Google Drive connector.
+        2. Authenticate with Drive and discover the connector's scope
+           (GoogleDriveConnector.connect() + discover_files()).
+        3. Load the Documents this connector already owns
+           (DocumentRepository.get_by_connector) and index them by
+           `source_id` - never by filename, which Drive doesn't
+           guarantee is a stable or unique identity (see the Document
+           model's docstring).
+        4. For each discovered entry: skip folders; skip a
+           Google-native file with no supported export mapping or a
+           non-native file of an unsupported type (each noted, not
+           silently dropped); skip a file whose Drive file ID already
+           has a Document (`files_unchanged`); otherwise fetch and
+           ingest it (`files_imported` on success, `files_failed` with
+           a note on any fetch/ingest failure - one bad file never
+           aborts the rest of the sync).
+        5. Update `connector.last_synced` once done.
+
+        If Drive itself can't be authenticated or the connector's
+        scope can't be reached at all, nothing is imported and
+        `last_synced` is left unchanged - the exception propagates to
+        the caller directly, exactly as `connect_google_drive` does.
+
+        Raises:
+            ConnectorNotFoundError: `connector_id` doesn't exist or its
+                workspace doesn't belong to `user_id`.
+            ConnectorTypeMismatchError: the connector isn't a Google
+                Drive connector.
+            ConnectorAuthenticationError / ConnectorResourceNotFoundError:
+                from GoogleDriveConnector.connect()/discover_files(), if
+                `access_token` isn't valid or the stored scope is no
+                longer accessible.
+        """
+        connector = await self.connector_repository.get_by_id_and_workspace_owner(
+            connector_id, user_id
+        )
+        if connector is None:
+            raise ConnectorNotFoundError(f"Connector {connector_id} was not found")
+        if connector.type != "google_drive":
+            raise ConnectorTypeMismatchError(
+                f"Connector {connector_id} is not a Google Drive connector"
+            )
+
+        google_drive_connector = GoogleDriveConnector(
+            access_token=access_token,
+            root_folder_id=connector.drive_root_folder_id,
+        )
+        # Raises ConnectorAuthenticationError / ConnectorResourceNotFoundError
+        # on failure - not caught here, so nothing is imported and
+        # last_synced is left unchanged if Drive can't be reached at all.
+        await google_drive_connector.connect()
+        discovered = await google_drive_connector.discover_files()
+
+        document_repository = self.document_service.document_repository
+        existing_documents = await document_repository.get_by_connector(connector.id)
+        existing_by_source_id: Dict[str, Document] = {
+            document.source_id: document
+            for document in existing_documents
+            if document.source_id is not None
+        }
+
+        files_imported = 0
+        files_unchanged = 0
+        files_skipped = 0
+        files_failed = 0
+        notes: List[str] = []
+
+        for drive_file in discovered:
+            if drive_file.is_folder:
+                continue
+
+            if drive_file.file_id in existing_by_source_id:
+                files_unchanged += 1
+                continue
+
+            if not drive_file.is_google_native and drive_file.extension is None:
+                files_skipped += 1
+                notes.append(f"{drive_file.name}: unsupported file type, skipped")
+                continue
+
+            try:
+                fetched = await google_drive_connector.fetch_file(drive_file)
+            except ConnectorResourceNotFoundError as exc:
+                files_skipped += 1
+                notes.append(f"{drive_file.name}: {exc}")
+                continue
+
+            ingested = await self._ingest_google_drive_file(connector, user_id, fetched)
+            if ingested:
+                files_imported += 1
+            else:
+                files_failed += 1
+                notes.append(f"{fetched.filename}: ingestion into DocumentService failed")
+
+        connector.last_synced = datetime.now(timezone.utc)
+        await self.connector_repository.session.flush()
+
+        return GoogleDriveSyncSummary(
+            connector_id=connector.id,
+            files_discovered=len(discovered),
+            files_imported=files_imported,
+            files_unchanged=files_unchanged,
+            files_skipped=files_skipped,
+            files_failed=files_failed,
+            status="completed",
+            notes=notes,
+        )
+
+    async def _ingest_google_drive_file(
+        self,
+        connector: Connector,
+        user_id: UUID,
+        fetched: GoogleDriveFetchedFile,
+    ) -> bool:
+        """Ingest one already-fetched Google Drive file through
+        DocumentService, returning True if it was successfully
+        indexed.
+
+        Always creates a new Document (Wave 6B is import-only - a file
+        whose Drive file ID already has a Document is filtered out
+        before this is called, in `sync_google_drive`), with
+        `connector_id` and `source_id` (the Drive file ID) set so a
+        later sync can find it via
+        DocumentRepository.get_by_connector, and the same Drive source
+        metadata (`origin`, `connector_id`, `drive_file_id`, `filename`,
+        `drive_url`, `workspace_id`) attached to every one of its
+        chunks that GitHub sync attaches for its own source fields
+        (Wave 5B/5C) - never the OAuth access token.
+        """
+        extra_metadata = {
+            "origin": "google_drive",
+            "connector_id": str(connector.id),
+            "drive_file_id": fetched.file_id,
+            "filename": fetched.filename,
+            "drive_url": fetched.web_view_link,
+            "workspace_id": str(connector.workspace_id),
+        }
+
+        try:
+            created = await self.document_service.upload_document(
+                workspace_id=connector.workspace_id,
+                user_id=user_id,
+                filename=fetched.filename,
+                content_type=fetched.mime_type,
+                content=fetched.content,
+                connector_id=connector.id,
+                source_id=fetched.file_id,
+            )
+        except (UnsupportedFileTypeError, FileTooLargeError):
+            return False
+        if created is None:
+            return False
+
+        try:
+            await self.document_service.reindex_document_for_user(
+                created.id, user_id, extra_chunk_metadata=extra_metadata
+            )
+        except IngestionFailedError:
+            return False
+
+        return True
 
     async def list_connectors_for_workspace(
         self, workspace_id: UUID, user_id: UUID

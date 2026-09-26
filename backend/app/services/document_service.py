@@ -98,6 +98,7 @@ class DocumentService:
         content_type: Optional[str],
         content: bytes,
         connector_id: Optional[UUID] = None,
+        source_id: Optional[str] = None,
     ) -> Optional[DocumentResponse]:
         """
         Validate, store, and record an uploaded document.
@@ -106,6 +107,13 @@ class DocumentService:
         connector (e.g. a GitHub sync, Wave 5C) rather than a manual
         upload - see the `connector_id` note on the Document model.
         Ordinary uploads leave this None.
+
+        `source_id`, if given, is that connector's stable external
+        identity for this document (e.g. a Google Drive file ID - see
+        the Document model's docstring and
+        ConnectorService.sync_google_drive, Wave 6B). Ordinary uploads
+        and connector types that use a different within-connector
+        identity (GitHub's `filename`/path, Wave 5C) leave this None.
 
         Returns None if workspace_id doesn't exist or isn't owned by
         user_id (caller should respond 404 without disclosing which).
@@ -136,6 +144,7 @@ class DocumentService:
                 id=document_id,
                 workspace_id=workspace_id,
                 connector_id=connector_id,
+                source_id=source_id,
                 filename=filename,
                 file_type=file_type,
                 file_size=len(content),

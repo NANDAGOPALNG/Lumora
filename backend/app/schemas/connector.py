@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -146,5 +146,41 @@ class GitHubSyncResponse(BaseModel):
     files_unchanged: int
     files_skipped: int
     status: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GoogleDriveSyncRequest(BaseModel):
+    """Request body for POST /api/v1/connectors/{connector_id}/sync/google-drive.
+
+    The Drive scope synced always comes from the connector's own stored
+    configuration (`drive_root_folder_id`), never a client-supplied
+    value - mirroring `GitHubSyncRequest` for the same reason.
+
+    `access_token` remains request-provided rather than stored (the
+    Connector model has no credential field, by design) and is never
+    persisted or included in the response.
+    """
+
+    access_token: str = Field(
+        ..., description="Google Drive OAuth access token used to authenticate this sync; never stored"
+    )
+
+
+class GoogleDriveSyncResponse(BaseModel):
+    """Safe summary of one Google Drive sync run - never includes any
+    credential. `notes`, if non-empty, briefly explains why individual
+    files were skipped or failed (e.g. an unsupported type) - never a
+    credential or raw exception detail.
+    """
+
+    connector_id: UUID
+    files_discovered: int
+    files_imported: int
+    files_unchanged: int
+    files_skipped: int
+    files_failed: int
+    status: str
+    notes: List[str] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)

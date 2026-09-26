@@ -16,13 +16,18 @@ Implements, per the API specification's Connector APIs section:
   connector itself, not a client-supplied one) against Lumora's
   existing documents for it, through the existing document ingestion
   pipeline (Wave 5C).
+* POST /api/v1/connectors/{connector_id}/sync/google-drive - full
+  (non-incremental) ingestion of a connected Google Drive connector's
+  discovered files, through that same existing document ingestion
+  pipeline (Wave 6B). Kept as its own route rather than folded into
+  the GitHub sync route above, which is GitHub-specific by design
+  (a different request/response shape - a Drive access token, not a
+  GitHub one, and Drive-specific counts).
 
 Notion connectors (also listed in the API specification) are not
-implemented in this wave. Google Drive file discovery beyond
-connect-time validation, and any sync/ingestion for either connector
-type's Drive files, are Wave 6B/6C work - see
-app/connectors/google_drive_connector.py and
-ConnectorService.discover_google_drive_files.
+implemented in this wave. Incremental Google Drive sync (detecting
+changed/deleted files, mirroring GitHub's Wave 5C) is Wave 6C work -
+see ConnectorService.sync_google_drive.
 
 Every route requires an authenticated user (`get_current_user`).
 Ownership is enforced by ConnectorService/ConnectorRepository at the
@@ -36,10 +41,12 @@ ingestion logic of its own.
 
 The GitHub token in POST /connectors/github's and
 POST /connectors/{id}/sync's request bodies, and the Google Drive
-OAuth access token in POST /connectors/google-drive's request body,
-are used only to validate access / authenticate the sync; neither is
+OAuth access token in POST /connectors/google-drive's and
+POST /connectors/{id}/sync/google-drive's request bodies, are used
+only to validate access / authenticate the sync; none of them is
 ever persisted, logged, or included in any response -
-ConnectorResponse/GitHubSyncResponse expose only safe metadata.
+ConnectorResponse/GitHubSyncResponse/GoogleDriveSyncResponse expose
+only safe metadata.
 """
 
 from typing import List
@@ -63,6 +70,8 @@ from app.schemas.connector import (
     GitHubSyncRequest,
     GitHubSyncResponse,
     GoogleDriveConnectorCreate,
+    GoogleDriveSyncRequest,
+    GoogleDriveSyncResponse,
 )
 from app.services.connector_service import (
     ConnectorMissingRepositoryError,
@@ -237,3 +246,37 @@ async def sync_github_connector(
         )
 
     return GitHubSyncResponse.model_validate(summary)
+
+
+@router.post("/{connector_id}/sync/google-drive", response_model=GoogleDriveSyncResponse)
+async def sync_google_drive_connector(
+    connector_id: UUID,
+    payload: GoogleDriveSyncRequest,
+    current_user: User = Depends(get_current_user),
+    connector_service: ConnectorService = Depends(get_connector_service),
+) -> GoogleDriveSyncResponse:
+    try:
+        summary = await connector_service.sync_google_drive(
+            connector_id=connector_id,
+            user_id=current_user.id,
+            access_token=payload.access_token,
+        )
+    except ConnectorNotFoundError:
+        raise _connector_not_found()
+    except ConnectorTypeMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "UNSUPPORTED_CONNECTOR_TYPE", "message": str(exc)},
+        )
+    except ConnectorAuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_GOOGLE_DRIVE_CREDENTIALS", "message": str(exc)},
+        )
+    except ConnectorResourceNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "GOOGLE_DRIVE_RESOURCE_NOT_FOUND", "message": str(exc)},
+        )
+
+    return GoogleDriveSyncResponse.model_validate(summary)
