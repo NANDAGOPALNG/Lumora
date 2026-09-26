@@ -9,12 +9,13 @@ Wave 6B (this file's other additions): fetch one discovered file's
 actual content (`fetch_file()`) - a binary download for an ordinary
 supported file, or a Drive "export" to a Lumora-ingestible format for
 a Google-native Doc/Sheet/Slide (see `_GOOGLE_NATIVE_EXPORT_TARGETS`).
-Turning fetched content into Document/Chunk rows and Qdrant points is
-still ConnectorService's job (`ConnectorService.sync_google_drive`),
-via the existing DocumentService pipeline - not this connector's, so
-`sync()`/`parse()`/`index()` remain unimplemented stubs below (Wave
-6C's incremental sync, mirroring GitHubConnector.sync(), is expected
-to be what finally implements `sync()` here).
+Turning fetched content into Document/Chunk rows and Qdrant points,
+including Wave 6C's incremental add/update/delete reconciliation, is
+ConnectorService's job (`ConnectorService.sync_google_drive`), via the
+existing DocumentService pipeline - not this connector's, so
+`sync()`/`parse()`/`index()` remain unimplemented stubs below (see
+`sync()`'s docstring for why this is a deliberate design difference
+from GitHubConnector.sync(), not an unfinished placeholder).
 
 Uses the `requests` library (already a direct project dependency - see
 pyproject.toml) against the Drive v3 REST API directly, run inside
@@ -405,11 +406,15 @@ class GoogleDriveConnector(BaseConnector):
 
     async def sync(self) -> Any:
         raise NotImplementedError(
-            "Google Drive incremental sync (change/delete reconciliation) "
-            "is Wave 6C work, not implemented by this connector yet - see "
-            "ConnectorService.sync_google_drive for Wave 6B's full-ingestion "
-            "orchestration, which calls discover_files()/fetch_file() "
-            "directly instead"
+            "Google Drive sync orchestration (discovery, change detection, "
+            "and reconciliation) lives in ConnectorService.sync_google_drive "
+            "(Wave 6C), which calls this connector's discover_files() and "
+            "fetch_file() directly rather than through a single sync() "
+            "call - unlike GitHubConnector.sync(), which does bundle "
+            "discovery+fetch into one call because GitHub's own API makes "
+            "that efficient (a single tree listing with blob SHAs). This "
+            "method is intentionally left unimplemented, not a placeholder "
+            "awaiting a future wave."
         )
 
     async def parse(self, raw_content: Any) -> Any:

@@ -16,18 +16,19 @@ Implements, per the API specification's Connector APIs section:
   connector itself, not a client-supplied one) against Lumora's
   existing documents for it, through the existing document ingestion
   pipeline (Wave 5C).
-* POST /api/v1/connectors/{connector_id}/sync/google-drive - full
-  (non-incremental) ingestion of a connected Google Drive connector's
-  discovered files, through that same existing document ingestion
-  pipeline (Wave 6B). Kept as its own route rather than folded into
-  the GitHub sync route above, which is GitHub-specific by design
-  (a different request/response shape - a Drive access token, not a
-  GitHub one, and Drive-specific counts).
+* POST /api/v1/connectors/{connector_id}/sync/google-drive -
+  incrementally reconcile a connected Google Drive connector's current
+  scope (the one stored on the connector itself, not a client-supplied
+  one) against Lumora's existing documents for it, through that same
+  existing document ingestion pipeline (Wave 6B introduced this route
+  as import-only; Wave 6C added incremental add/update/delete
+  reconciliation, mirroring GitHub's Wave 5C). Kept as its own route
+  rather than folded into the GitHub sync route above, which is
+  GitHub-specific by design (a different request/response shape - a
+  Drive access token, not a GitHub one, and Drive-specific counts).
 
 Notion connectors (also listed in the API specification) are not
-implemented in this wave. Incremental Google Drive sync (detecting
-changed/deleted files, mirroring GitHub's Wave 5C) is Wave 6C work -
-see ConnectorService.sync_google_drive.
+implemented in this wave.
 
 Every route requires an authenticated user (`get_current_user`).
 Ownership is enforced by ConnectorService/ConnectorRepository at the

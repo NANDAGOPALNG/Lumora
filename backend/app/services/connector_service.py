@@ -148,12 +148,19 @@ class GoogleDriveSyncSummary:
     directly from the API (see GoogleDriveSyncResponse): no credential,
     and nothing beyond simple counts, identifiers, and short,
     non-secret notes about why individual files were skipped or
-    failed.
+    failed. Field names mirror `GitHubSyncSummary` where the concepts
+    match (`files_added`/`files_updated`/`files_deleted`/
+    `files_unchanged`), plus `files_failed` - kept distinct from
+    `files_skipped` because Google Drive sync (unlike GitHub's) can
+    fail *after* a file was already fetched (reindexing/embedding), not
+    only before it (an unsupported type or an inaccessible file).
     """
 
     connector_id: UUID
     files_discovered: int
-    files_imported: int
+    files_added: int
+    files_updated: int
+    files_deleted: int
     files_unchanged: int
     files_skipped: int
     files_failed: int
@@ -341,49 +348,79 @@ class ConnectorService:
         user_id: UUID,
         access_token: str,
     ) -> GoogleDriveSyncSummary:
-        """Full (non-incremental) ingestion of a Google Drive
-        connector's discovered files into Lumora's existing document
-        pipeline.
+        """Incrementally reconcile a Google Drive connector's current
+        Drive scope against Lumora's existing documents for it,
+        through the existing DocumentService pipeline - the Google
+        Drive analogue of `sync_github` above (Wave 6C; Wave 6B was
+        import-only and never revisited an already-imported file).
 
-        Wave 6B only: every discovered, supported file not already
-        imported for this connector is fetched and ingested; a file
-        already imported (matched by `connector_id` + Drive file ID -
-        see `Document.source_id`) is left untouched rather than
-        refetched/reindexed - detecting and applying *changes* to an
-        already-imported file (mirroring GitHub's Wave 5C SHA
-        comparison) and removing Documents for files deleted from
-        Drive are both Wave 6C work, not this method's.
-
-        `access_token` remains request-provided (mirroring
-        `connect_google_drive`) and is never persisted, logged, or
-        returned - and never enters Document or chunk metadata either
-        (only the Drive file's own non-secret identity/URL does, via
+        The scope synced is always the connector's own stored
+        configuration (`connector.drive_root_folder_id`), never a
+        client-supplied value - mirroring `sync_github`.
+        `access_token` remains request-provided and is never
+        persisted, logged, or returned - and never enters Document or
+        chunk metadata either (only the Drive file's own non-secret
+        identity/URL/modified time does, via
         `_ingest_google_drive_file`).
 
-        Algorithm:
+        Algorithm (mirrors `sync_github`'s, adapted for Drive's own
+        identity/change-detection signals):
         1. Load the connector, scoped to `user_id`, and confirm it's a
            Google Drive connector.
-        2. Authenticate with Drive and discover the connector's scope
-           (GoogleDriveConnector.connect() + discover_files()).
+        2. Authenticate with Drive and discover the connector's
+           *current* scope (GoogleDriveConnector.connect() +
+           discover_files() - paginated internally, see that method).
+           Neither call is caught here: if Drive can't be
+           authenticated, or discovery itself fails, nothing below
+           runs at all - no Document is added, changed, or deleted,
+           and `last_synced` is left unchanged, exactly as `connect_google_drive`
+           behaves on the same failures. This is deliberate: a
+           discovery failure must never be mistaken for "the Drive is
+           now empty" (which would otherwise look like every file was
+           deleted).
         3. Load the Documents this connector already owns
            (DocumentRepository.get_by_connector) and index them by
-           `source_id` - never by filename, which Drive doesn't
-           guarantee is a stable or unique identity (see the Document
+           `source_id` (the Drive file ID - the authoritative identity
+           Wave 6B established; never by filename/path/display name,
+           none of which Drive guarantees is stable - see the Document
            model's docstring).
-        4. For each discovered entry: skip folders; skip a
-           Google-native file with no supported export mapping or a
-           non-native file of an unsupported type (each noted, not
-           silently dropped); skip a file whose Drive file ID already
-           has a Document (`files_unchanged`); otherwise fetch and
-           ingest it (`files_imported` on success, `files_failed` with
-           a note on any fetch/ingest failure - one bad file never
-           aborts the rest of the sync).
-        5. Update `connector.last_synced` once done.
+        4. For each currently discovered, non-folder, supported entry:
+           if no existing Document matches its Drive file ID, ingest
+           it as new (`files_added`); if one does, compare its stored
+           change signal (`drive_modified_time`, read back from that
+           Document's own chunk metadata via
+           ChunkRepository.get_metadata_sample - see
+           `_ingest_google_drive_file`'s docstring for why this lives
+           in chunk metadata rather than a new column) against the
+           file's current `modifiedTime`: identical means skip it
+           untouched (`files_unchanged`); anything else (including a
+           missing/unreadable stored value, which can't be proven
+           unchanged) means refetch/export and reindex it *in place*
+           - same Document row and id, not a new one
+           (`files_updated`). A file this wave can't fetch/export at
+           all (unsupported type, or a Google-native format with no
+           export mapping) is noted and counted separately
+           (`files_skipped`) without touching any existing Document
+           for it.
+        5. For each existing Document owned by this connector whose
+           Drive file ID is no longer part of the current discovery
+           result, delete it via DocumentService.delete_document_for_user -
+           which removes its PostgreSQL row (chunks cascade), local
+           file, and Qdrant vectors (see that method's docstring).
+           This only runs at all if step 2's discovery succeeded, per
+           the data-safety requirement above.
+        6. Only now, with reconciliation complete, update
+           `connector.last_synced`.
 
-        If Drive itself can't be authenticated or the connector's
-        scope can't be reached at all, nothing is imported and
-        `last_synced` is left unchanged - the exception propagates to
-        the caller directly, exactly as `connect_google_drive` does.
+        One file's fetch/export/reindex failure is counted
+        (`files_failed`, with a non-secret note) rather than aborting
+        the rest of the sync - and, for an already-imported file whose
+        update fails, its previous Document/chunks/vectors are left
+        exactly as they were (reindex_document_for_user only replaces
+        a document's chunks/vectors after the new content has been
+        successfully parsed, chunked, and embedded - see that method's
+        docstring - so a failed update never leaves a known-good
+        document in a half-replaced or deleted state).
 
         Raises:
             ConnectorNotFoundError: `connector_id` doesn't exist or its
@@ -392,8 +429,9 @@ class ConnectorService:
                 Drive connector.
             ConnectorAuthenticationError / ConnectorResourceNotFoundError:
                 from GoogleDriveConnector.connect()/discover_files(), if
-                `access_token` isn't valid or the stored scope is no
-                longer accessible.
+                `access_token` isn't valid or the connector's configured
+                scope is no longer accessible - nothing is reconciled
+                and `last_synced` is left unchanged (see step 2 above).
         """
         connector = await self.connector_repository.get_by_id_and_workspace_owner(
             connector_id, user_id
@@ -409,13 +447,17 @@ class ConnectorService:
             access_token=access_token,
             root_folder_id=connector.drive_root_folder_id,
         )
-        # Raises ConnectorAuthenticationError / ConnectorResourceNotFoundError
-        # on failure - not caught here, so nothing is imported and
-        # last_synced is left unchanged if Drive can't be reached at all.
+        # Neither call is caught here - an authentication failure or a
+        # failed discovery both propagate straight to the caller, with
+        # nothing below reached at all: no addition, update, or
+        # deletion, and last_synced left unchanged. This is what keeps
+        # a Drive outage or a bad token from ever being reconciled as
+        # "every file was deleted" (see this method's docstring).
         await google_drive_connector.connect()
         discovered = await google_drive_connector.discover_files()
 
         document_repository = self.document_service.document_repository
+        chunk_repository = self.document_service.chunk_repository
         existing_documents = await document_repository.get_by_connector(connector.id)
         existing_by_source_id: Dict[str, Document] = {
             document.source_id: document
@@ -423,7 +465,9 @@ class ConnectorService:
             if document.source_id is not None
         }
 
-        files_imported = 0
+        discovered_source_ids = set()
+        files_added = 0
+        files_updated = 0
         files_unchanged = 0
         files_skipped = 0
         files_failed = 0
@@ -433,13 +477,48 @@ class ConnectorService:
             if drive_file.is_folder:
                 continue
 
-            if drive_file.file_id in existing_by_source_id:
-                files_unchanged += 1
-                continue
-
             if not drive_file.is_google_native and drive_file.extension is None:
                 files_skipped += 1
                 notes.append(f"{drive_file.name}: unsupported file type, skipped")
+                continue
+
+            discovered_source_ids.add(drive_file.file_id)
+            existing_document = existing_by_source_id.get(drive_file.file_id)
+
+            if existing_document is not None:
+                stored_metadata = await chunk_repository.get_metadata_sample(
+                    existing_document.id
+                )
+                stored_modified_time = (stored_metadata or {}).get("drive_modified_time")
+                # A missing/unreadable stored value can't be proven
+                # unchanged (e.g. a Document from before this field
+                # existed, or one whose only previous ingestion
+                # attempt failed and left no chunks) - treat it as
+                # changed rather than silently trusting stale content.
+                if (
+                    stored_modified_time is not None
+                    and stored_modified_time == drive_file.modified_time
+                ):
+                    files_unchanged += 1
+                    continue
+
+                try:
+                    fetched = await google_drive_connector.fetch_file(drive_file)
+                except ConnectorResourceNotFoundError as exc:
+                    files_skipped += 1
+                    notes.append(f"{drive_file.name}: {exc}")
+                    continue
+
+                updated = await self._ingest_google_drive_file(
+                    connector, user_id, fetched, existing_document_id=existing_document.id
+                )
+                if updated:
+                    files_updated += 1
+                else:
+                    files_failed += 1
+                    notes.append(
+                        f"{fetched.filename}: update failed, previous version kept"
+                    )
                 continue
 
             try:
@@ -449,12 +528,24 @@ class ConnectorService:
                 notes.append(f"{drive_file.name}: {exc}")
                 continue
 
-            ingested = await self._ingest_google_drive_file(connector, user_id, fetched)
-            if ingested:
-                files_imported += 1
+            added = await self._ingest_google_drive_file(
+                connector, user_id, fetched, existing_document_id=None
+            )
+            if added:
+                files_added += 1
             else:
                 files_failed += 1
                 notes.append(f"{fetched.filename}: ingestion into DocumentService failed")
+
+        files_deleted = 0
+        for source_id, document in existing_by_source_id.items():
+            if source_id in discovered_source_ids:
+                continue
+            deleted = await self.document_service.delete_document_for_user(
+                document.id, user_id
+            )
+            if deleted:
+                files_deleted += 1
 
         connector.last_synced = datetime.now(timezone.utc)
         await self.connector_repository.session.flush()
@@ -462,7 +553,9 @@ class ConnectorService:
         return GoogleDriveSyncSummary(
             connector_id=connector.id,
             files_discovered=len(discovered),
-            files_imported=files_imported,
+            files_added=files_added,
+            files_updated=files_updated,
+            files_deleted=files_deleted,
             files_unchanged=files_unchanged,
             files_skipped=files_skipped,
             files_failed=files_failed,
@@ -475,22 +568,38 @@ class ConnectorService:
         connector: Connector,
         user_id: UUID,
         fetched: GoogleDriveFetchedFile,
+        *,
+        existing_document_id: Optional[UUID] = None,
     ) -> bool:
         """Ingest one already-fetched Google Drive file through
         DocumentService, returning True if it was successfully
         indexed.
 
-        Always creates a new Document (Wave 6B is import-only - a file
-        whose Drive file ID already has a Document is filtered out
-        before this is called, in `sync_google_drive`), with
-        `connector_id` and `source_id` (the Drive file ID) set so a
-        later sync can find it via
-        DocumentRepository.get_by_connector, and the same Drive source
-        metadata (`origin`, `connector_id`, `drive_file_id`, `filename`,
-        `drive_url`, `workspace_id`) attached to every one of its
-        chunks that GitHub sync attaches for its own source fields
-        (Wave 5B/5C) - never the OAuth access token.
+        `existing_document_id`, when given, is the Document this
+        connector already owns for this Drive file ID (a changed
+        file - see `sync_google_drive`): mirroring
+        `_ingest_github_file`, its stored content is overwritten in
+        place at its existing storage_path and it's reindexed under
+        the same document_id, rather than a new Document being
+        created - `sync_google_drive` requires this (a modified file's
+        Document ID must not change). When None (a new file), a new
+        Document is created via DocumentService.upload_document with
+        `connector_id` and `source_id` set, so a later sync can find
+        it via DocumentRepository.get_by_connector.
+
+        `drive_modified_time` is stored in this ingestion's chunk
+        metadata (alongside the rest of the Drive source fields) so
+        `sync_google_drive` can read it back via
+        ChunkRepository.get_metadata_sample as this Document's stored
+        change signal next time - deliberately not a new Document
+        column: Wave 6B already established this same pattern for
+        GitHub's `github_sha` (chunk metadata, not a column - see
+        `_ingest_github_file`), and reusing it here needs no schema
+        change, per this wave's spec (only add a migration if the
+        existing metadata genuinely can't support reconciliation).
         """
+        document_repository = self.document_service.document_repository
+
         extra_metadata = {
             "origin": "google_drive",
             "connector_id": str(connector.id),
@@ -498,26 +607,40 @@ class ConnectorService:
             "filename": fetched.filename,
             "drive_url": fetched.web_view_link,
             "workspace_id": str(connector.workspace_id),
+            "drive_modified_time": fetched.modified_time,
         }
 
-        try:
-            created = await self.document_service.upload_document(
-                workspace_id=connector.workspace_id,
-                user_id=user_id,
-                filename=fetched.filename,
-                content_type=fetched.mime_type,
-                content=fetched.content,
-                connector_id=connector.id,
-                source_id=fetched.file_id,
+        if existing_document_id is not None:
+            existing = await document_repository.get_by_id_and_workspace_owner(
+                existing_document_id, user_id
             )
-        except (UnsupportedFileTypeError, FileTooLargeError):
-            return False
-        if created is None:
-            return False
+            if existing is None:
+                return False
+            local_storage.save_file(existing.storage_path, fetched.content)
+            await document_repository.update_for_owner(
+                existing.id, user_id, {"file_size": fetched.size}
+            )
+            document_id = existing.id
+        else:
+            try:
+                created = await self.document_service.upload_document(
+                    workspace_id=connector.workspace_id,
+                    user_id=user_id,
+                    filename=fetched.filename,
+                    content_type=fetched.mime_type,
+                    content=fetched.content,
+                    connector_id=connector.id,
+                    source_id=fetched.file_id,
+                )
+            except (UnsupportedFileTypeError, FileTooLargeError):
+                return False
+            if created is None:
+                return False
+            document_id = created.id
 
         try:
             await self.document_service.reindex_document_for_user(
-                created.id, user_id, extra_chunk_metadata=extra_metadata
+                document_id, user_id, extra_chunk_metadata=extra_metadata
             )
         except IngestionFailedError:
             return False

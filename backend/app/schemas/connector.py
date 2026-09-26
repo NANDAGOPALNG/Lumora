@@ -169,14 +169,20 @@ class GoogleDriveSyncRequest(BaseModel):
 
 class GoogleDriveSyncResponse(BaseModel):
     """Safe summary of one Google Drive sync run - never includes any
-    credential. `notes`, if non-empty, briefly explains why individual
-    files were skipped or failed (e.g. an unsupported type) - never a
-    credential or raw exception detail.
+    credential. Field names mirror `GitHubSyncResponse` where the
+    concepts match (Wave 6C added incremental reconciliation -
+    additions, updates, and deletions - to what Wave 6B's initial
+    version only imported). `notes`, if non-empty, briefly explains
+    why individual files were skipped or failed (e.g. an unsupported
+    type, or an update that failed and left the previous version
+    intact) - never a credential or raw exception detail.
     """
 
     connector_id: UUID
     files_discovered: int
-    files_imported: int
+    files_added: int
+    files_updated: int
+    files_deleted: int
     files_unchanged: int
     files_skipped: int
     files_failed: int

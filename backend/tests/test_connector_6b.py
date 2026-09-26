@@ -253,7 +253,7 @@ def test_binary_file_download_and_ingestion(monkeypatch):
             await session.commit()
 
             assert summary.files_discovered == 1
-            assert summary.files_imported == 1
+            assert summary.files_added == 1
             assert summary.files_failed == 0
             assert summary.status == "completed"
 
@@ -312,7 +312,7 @@ def test_google_native_export_and_ingestion(monkeypatch, mime_type, expected_ext
             )
             await session.commit()
 
-            assert summary.files_imported == 1
+            assert summary.files_added == 1
             assert summary.files_failed == 0
 
             documents = await DocumentRepository(session).get_by_connector(connector.id)
@@ -355,7 +355,7 @@ def test_unsupported_file_is_skipped(monkeypatch):
             )
 
             assert summary.files_discovered == 2
-            assert summary.files_imported == 0
+            assert summary.files_added == 0
             assert summary.files_skipped == 1
             assert any("archive.zip" in note for note in summary.notes)
 
@@ -380,7 +380,8 @@ def test_duplicate_sync_does_not_create_second_document(monkeypatch):
         _install_fake_drive_api(
             monkeypatch,
             discovery_files=[
-                {"id": "pdf-dup", "name": "notes.pdf", "mimeType": "application/pdf"},
+                {"id": "pdf-dup", "name": "notes.pdf", "mimeType": "application/pdf",
+                 "modifiedTime": "2026-01-01T00:00:00Z"},
             ],
             downloads={"pdf-dup": pdf_bytes},
         )
@@ -394,14 +395,14 @@ def test_duplicate_sync_does_not_create_second_document(monkeypatch):
                 connector_id=connector.id, user_id=user_a.id, access_token="tok",
             )
             await session.commit()
-            assert first.files_imported == 1
+            assert first.files_added == 1
             assert first.files_unchanged == 0
 
             second = await service.sync_google_drive(
                 connector_id=connector.id, user_id=user_a.id, access_token="tok",
             )
             await session.commit()
-            assert second.files_imported == 0
+            assert second.files_added == 0
             assert second.files_unchanged == 1
 
             documents = await DocumentRepository(session).get_by_connector(connector.id)
@@ -443,7 +444,7 @@ def test_failed_file_is_reported_and_others_still_import(monkeypatch):
             await session.commit()
 
             assert summary.files_discovered == 2
-            assert summary.files_imported == 1
+            assert summary.files_added == 1
             assert summary.files_skipped == 1
             assert any("bad.pdf" in note for note in summary.notes)
 
@@ -512,7 +513,7 @@ def test_no_credential_leakage_into_documents_chunks_or_responses(monkeypatch):
             json={"access_token": secret_token},
         )
         assert sync_resp.status_code == 200
-        assert sync_resp.json()["files_imported"] == 1
+        assert sync_resp.json()["files_added"] == 1
         assert secret_token not in sync_resp.text
 
         async def _check_no_token_in_storage():
