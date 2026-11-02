@@ -1,10 +1,46 @@
-# Python-generated files
+# Environment files (the example file must stay tracked)
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
 __pycache__/
-*.py[oc]
+*.py[cod]
+*.egg-info/
 build/
 dist/
 wheels/
-*.egg-info
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# Virtual environments
-.venv
+# Node / Next.js
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Local uploaded documents and generated files
+# (DOCUMENT_STORAGE_PATH defaults to storage/documents, relative to the working directory)
+backend/storage/
+/storage/
+backend/ingestion-test/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
