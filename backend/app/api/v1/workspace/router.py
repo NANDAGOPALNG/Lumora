@@ -18,18 +18,26 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.document.router import get_vector_store
 from app.auth.dependencies import get_current_user
 from app.database.session import get_db
 from app.models.user import User
+from app.repositories.document_repository import DocumentRepository
 from app.repositories.workspace_repository import WorkspaceRepository
 from app.schemas.workspace import WorkspaceCreate, WorkspaceResponse, WorkspaceUpdate
 from app.services.workspace_service import WorkspaceService
+from app.vector_store import QdrantVectorStore
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
 
-def get_workspace_service(session: AsyncSession = Depends(get_db)) -> WorkspaceService:
-    return WorkspaceService(WorkspaceRepository(session))
+def get_workspace_service(
+    session: AsyncSession = Depends(get_db),
+    vector_store: QdrantVectorStore = Depends(get_vector_store),
+) -> WorkspaceService:
+    return WorkspaceService(
+        WorkspaceRepository(session), DocumentRepository(session), vector_store
+    )
 
 
 def _workspace_not_found() -> HTTPException:

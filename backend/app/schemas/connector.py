@@ -79,6 +79,7 @@ class GoogleDriveConnectorCreate(BaseModel):
     )
     root_folder_id: Optional[str] = Field(
         default=None,
+        pattern=r"^[A-Za-z0-9_-]{1,128}$",
         description="Optional Drive folder ID to scope this connector to; omit for the whole Drive",
     )
     connection_name: Optional[str] = Field(

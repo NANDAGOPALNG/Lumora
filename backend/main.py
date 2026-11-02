@@ -1,4 +1,8 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import HTTPException as StarletteHTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -10,15 +14,37 @@ from app.api.v1.document import router as documents_router
 from app.api.v1.search import router as search_router
 from app.api.v1.workspace import router as workspaces_router
 from app.config.settings import Settings
+from app.database.session import dispose_engine
 
 # Load settings and configure logging
 settings = Settings.get_instance()
 settings.configure_logging()
 
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    yield
+    # Release pooled database connections on shutdown.
+    await dispose_engine()
+
+
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description=settings.app_description,
+    lifespan=lifespan,
+)
+
+# Authentication uses a Bearer token in the Authorization header (no
+# cookies), so credentials are not allowed cross-origin.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 app.include_router(auth_router, prefix="/api/v1")
@@ -74,7 +100,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Never leak internal exception details (DB errors, stack traces, etc.) to clients."""
+    """Never leak internal exception details (DB errors, stack traces, etc.) to clients.
+
+    The full exception is logged server-side so failures stay diagnosable.
+    """
+    logger.error("Unhandled exception on %s %s", request.method, request.url.path, exc_info=exc)
     return JSONResponse(
         status_code=500,
         content={

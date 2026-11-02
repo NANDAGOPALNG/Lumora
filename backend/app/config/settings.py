@@ -1,5 +1,6 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
-from typing import Optional
+from typing import List, Optional
 from enum import Enum
 
 class Environment(str, Enum):
@@ -53,6 +54,10 @@ class Settings(BaseSettings):
     gemini_api_key: Optional[str] = None
     gemini_model_name: str = "gemini-3.6-flash"
 
+    # CORS: comma-separated list of allowed browser origins (e.g. the
+    # Next.js frontend). Empty in production unless explicitly set.
+    cors_origins: str = "http://localhost:3000"
+
     # Environment
     environment: Environment = Environment.DEVELOPMENT
 
@@ -62,6 +67,21 @@ class Settings(BaseSettings):
         "extra": "ignore",
         "case_sensitive": False,
     }
+
+    @model_validator(mode="after")
+    def _validate_production_settings(self) -> "Settings":
+        """Fail fast at startup on unsafe production configuration,
+        rather than at the first request that needs the setting."""
+        if self.environment == Environment.PRODUCTION:
+            if not self.database_url:
+                raise ValueError("DATABASE_URL must be set in production")
+            if len(self.secret_key) < 32:
+                raise ValueError("SECRET_KEY must be at least 32 characters in production")
+        return self
+
+    @property
+    def cors_origin_list(self) -> List[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     def get_database_url(self) -> Optional[str]:
         if self.database_url:

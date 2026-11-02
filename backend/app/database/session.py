@@ -57,7 +57,22 @@ def _build_async_url_and_connect_args(database_url: str):
 
     return url, connect_args
 
+_engine = None
+_session_factory = None
+
+
 async def get_async_engine():
+    """Return the process-wide async engine, creating it on first use.
+
+    The engine (and its connection pool) must be created once and
+    reused: building a new engine per request would open a fresh pool
+    every time and never release it. `dispose_engine()` is called at
+    application shutdown.
+    """
+    global _engine
+    if _engine is not None:
+        return _engine
+
     settings = Settings.get_instance()
     database_url = settings.get_database_url()
 
@@ -66,23 +81,41 @@ async def get_async_engine():
 
     async_url, connect_args = _build_async_url_and_connect_args(database_url)
 
-    return create_async_engine(
+    _engine = create_async_engine(
         async_url,
         pool_pre_ping=True,
         pool_recycle=3600,
         echo=False,
         connect_args=connect_args,
     )
+    return _engine
+
+
+async def _get_session_factory():
+    global _session_factory
+    if _session_factory is None:
+        engine = await get_async_engine()
+        _session_factory = sessionmaker(
+            engine,
+            class_=AsyncSession,
+            autocommit=False,
+            autoflush=False,
+            expire_on_commit=False,
+        )
+    return _session_factory
+
+
+async def dispose_engine() -> None:
+    """Release the shared engine's connections (application shutdown)."""
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+    _engine = None
+    _session_factory = None
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    engine = await get_async_engine()
-    async_session_factory = sessionmaker(
-        engine,
-        class_=AsyncSession,
-        autocommit=False,
-        autoflush=False,
-        expire_on_commit=False,
-    )
+    async_session_factory = await _get_session_factory()
 
     async with async_session_factory() as session:
         try:

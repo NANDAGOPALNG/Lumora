@@ -26,7 +26,6 @@ class DocumentResponse(BaseModel):
     filename: str
     file_type: str
     file_size: int
-    storage_path: str
     status: DocumentStatus
     chunk_count: int
     uploaded_at: datetime

@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
+from app.config.settings import Settings
 from app.database.session import get_db
 from app.models.user import User
 from app.repositories.chunk_repository import ChunkRepository
@@ -78,7 +79,9 @@ async def upload_document(
     current_user: User = Depends(get_current_user),
     document_service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
-    content = await file.read()
+    # Read at most one byte past the limit: enough for the service's size
+    # check to reject an oversized file without buffering all of it in memory.
+    content = await file.read(Settings.get_instance().max_document_size_bytes + 1)
 
     try:
         document = await document_service.upload_document(
