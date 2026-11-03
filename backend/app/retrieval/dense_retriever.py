@@ -15,6 +15,7 @@ Not wired into any API route yet: this is a reusable primitive meant
 to be composed by a future SearchService.
 """
 
+import asyncio
 from dataclasses import dataclass
 from typing import List, Optional
 from uuid import UUID
@@ -138,7 +139,8 @@ class DenseRetriever:
         )
         resolved_top_k = _validate_top_k(top_k)
 
-        query_vector = embed_text(validated_query)
+        # CPU-bound model call: run it off the event loop.
+        query_vector = await asyncio.to_thread(embed_text, validated_query)
         query_filter = _build_filter(workspace_uuid, document_uuid)
 
         points = await self.vector_store.search(

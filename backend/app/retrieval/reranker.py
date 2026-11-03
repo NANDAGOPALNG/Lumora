@@ -25,6 +25,8 @@ from app.retrieval.validation import validate_query, validate_top_k
 
 _model = None
 _model_lock = threading.Lock()
+# rerank() runs on a worker thread (see SearchService); serialize model calls.
+_inference_lock = threading.Lock()
 
 
 class RerankerError(Exception):
@@ -161,7 +163,8 @@ class CrossEncoderReranker:
             pairs = [(validated_query, candidate.content) for candidate in scorable]
 
             try:
-                raw_scores = model.predict(pairs)
+                with _inference_lock:
+                    raw_scores = model.predict(pairs)
             except Exception as exc:
                 raise RerankerError("Failed to score candidates with the reranker model") from exc
 

@@ -15,6 +15,10 @@ EMBEDDING_DIMENSION = 1024
 
 _model = None
 _model_lock = threading.Lock()
+# Inference runs on worker threads (see DocumentService / DenseRetriever), and
+# HuggingFace fast tokenizers can raise "Already borrowed" when used by two
+# threads at once, so model calls are serialized.
+_inference_lock = threading.Lock()
 
 
 class EmbeddingError(Exception):
@@ -95,13 +99,14 @@ def embed_texts(texts: List[str], batch_size: Optional[int] = None) -> List[List
     model = _load_model()
 
     try:
-        vectors = model.encode(
-            texts,
-            batch_size=resolved_batch_size,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        )
+        with _inference_lock:
+            vectors = model.encode(
+                texts,
+                batch_size=resolved_batch_size,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
     except Exception as exc:
         raise EmbeddingError("Failed to generate embeddings") from exc
 

@@ -18,7 +18,7 @@ and KeywordRetriever.
 """
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional
 from uuid import UUID
 
@@ -188,4 +188,36 @@ class HybridRetriever:
         ]
         fused.sort(key=lambda r: (-r.score, str(r.chunk_id)))
 
-        return fused[:resolved_top_k]
+        return await self._fill_missing_content(fused[:resolved_top_k], workspace_uuid)
+
+    async def _fill_missing_content(
+        self, results: List[HybridSearchResult], workspace_uuid: UUID
+    ) -> List[HybridSearchResult]:
+        """Give vector-only hits their text, and drop stale ones.
+
+        Qdrant payloads carry no chunk text, so a chunk found only by dense
+        retrieval arrives here with `content=None` - and would otherwise be
+        ranked last by the reranker and left out of the LLM context while
+        still being listed as a source. Load its text from PostgreSQL
+        (scoped to the workspace). A chunk whose row no longer exists is a
+        stale vector (e.g. left behind by a failed re-index or a delete
+        whose Qdrant cleanup failed): it is dropped rather than surfaced as
+        a phantom citation.
+
+        A keyword retriever without `load_contents` (a test double, say)
+        leaves results unchanged.
+        """
+        missing = [r.chunk_id for r in results if r.content is None]
+        load_contents = getattr(self.keyword_retriever, "load_contents", None)
+        if not missing or load_contents is None:
+            return results
+
+        contents = await load_contents(missing, workspace_uuid)
+
+        filled: List[HybridSearchResult] = []
+        for result in results:
+            if result.content is not None:
+                filled.append(result)
+            elif result.chunk_id in contents:
+                filled.append(replace(result, content=contents[result.chunk_id]))
+        return filled

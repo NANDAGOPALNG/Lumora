@@ -32,7 +32,7 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
 
 def get_workspace_service(
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_db, scope="function"),
     vector_store: QdrantVectorStore = Depends(get_vector_store),
 ) -> WorkspaceService:
     return WorkspaceService(

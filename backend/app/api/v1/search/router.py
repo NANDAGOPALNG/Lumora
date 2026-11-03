@@ -45,7 +45,7 @@ router = APIRouter(prefix="/search", tags=["search"])
 
 
 def get_search_service(
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_db, scope="function"),
     vector_store: QdrantVectorStore = Depends(get_vector_store),
 ) -> SearchService:
     """Compose SearchService from the existing retrieval primitives.
@@ -79,7 +79,7 @@ def _workspace_not_found() -> HTTPException:
 async def search(
     payload: SearchRequest,
     current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_db, scope="function"),
     search_service: SearchService = Depends(get_search_service),
 ) -> SearchResponse:
     workspace_repository = WorkspaceRepository(session)
