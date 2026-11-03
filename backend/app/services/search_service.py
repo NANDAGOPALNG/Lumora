@@ -20,6 +20,7 @@ inspection of those two didn't surface any scoping gap for this
 service to fill.
 """
 
+import asyncio
 from dataclasses import dataclass
 from typing import Optional
 
@@ -115,7 +116,9 @@ class SearchService:
             top_k=top_k,
         )
 
-        reranked_results = self.reranker.rerank(
+        # Cross-encoder scoring is CPU-bound: run it off the event loop.
+        reranked_results = await asyncio.to_thread(
+            self.reranker.rerank,
             rewritten_query.normalized,
             hybrid_results,
             top_k=top_k,

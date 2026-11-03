@@ -78,7 +78,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 def get_chat_service(
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_db, scope="function"),
     vector_store: QdrantVectorStore = Depends(get_vector_store),
 ) -> ChatService:
     """Compose ChatService from the existing retrieval primitives plus
@@ -135,7 +135,7 @@ def _conversation_not_found() -> HTTPException:
 async def chat(
     payload: ChatRequest,
     current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_db, scope="function"),
     chat_service: ChatService = Depends(get_chat_service),
 ) -> ChatResponse:
     workspace_repository = WorkspaceRepository(session)

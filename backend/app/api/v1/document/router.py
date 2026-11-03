@@ -47,7 +47,7 @@ def get_vector_store() -> QdrantVectorStore:
 
 
 def get_document_service(
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_db, scope="function"),
     vector_store: QdrantVectorStore = Depends(get_vector_store),
 ) -> DocumentService:
     return DocumentService(

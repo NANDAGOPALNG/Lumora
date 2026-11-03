@@ -8,6 +8,7 @@ WorkspaceRepository), never by fetching a row and comparing ownership
 in Python afterward.
 """
 
+import asyncio
 from typing import List, Optional
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
@@ -253,6 +254,17 @@ class DocumentService:
                 for ingested_chunk in ingested_chunks
             ]
 
+            # Embed first - before any chunk row is deleted or replaced.
+            # If the embedding model fails, the document's existing chunks
+            # and Qdrant points are still exactly as they were (previously
+            # the chunks were replaced and committed first, leaving new
+            # PostgreSQL chunks beside old, orphaned vectors). The model
+            # call is CPU-bound, so it runs off the event loop; embed_texts
+            # serializes model access internally.
+            vectors = await asyncio.to_thread(
+                embed_texts, [chunk_row.content for chunk_row in chunk_rows]
+            )
+
             # A SAVEPOINT: if anything in this block fails, only the chunk
             # delete/insert is rolled back - old chunks are left intact,
             # and the outer transaction (including the Processing status
@@ -267,11 +279,9 @@ class DocumentService:
             persisted_count = await self.chunk_repository.count_chunks(document.id)
 
             # PostgreSQL and Qdrant are two separate systems with no shared
-            # transaction. Generate embeddings for the full new chunk set
-            # before touching Qdrant at all, so the old (still valid)
-            # Qdrant points are never removed unless replacement vectors
-            # are actually ready.
-            vectors = embed_texts([chunk_row.content for chunk_row in chunk_rows])
+            # transaction. The replacement vectors were generated above,
+            # before touching either system, so the old (still valid)
+            # Qdrant points are never removed unless replacements are ready.
 
             qdrant_points = [
                 QdrantChunkPoint(
