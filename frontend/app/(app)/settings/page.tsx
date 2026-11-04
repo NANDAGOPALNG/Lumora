@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/shared/page-header";
 import { ThemeSelector } from "@/components/shared/theme-selector";
-import { Badge } from "@/components/ui/badge";
+import { AccountSummary } from "@/components/auth/account-summary";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -22,16 +22,16 @@ export default function SettingsPage() {
           <ThemeSelector />
         </section>
 
-        <section aria-labelledby="account-heading" className="space-y-1 border-t pt-8">
-          <div className="flex items-center gap-2">
+        <section aria-labelledby="account-heading" className="space-y-4 border-t pt-8">
+          <div className="space-y-1">
             <h2 id="account-heading" className="text-[15px] font-semibold">
               Account
             </h2>
-            <Badge variant="outline">Not available yet</Badge>
+            <p className="text-sm text-muted-foreground">
+              You&apos;re signed in with Google. Sessions are short-lived, so you may be asked to sign in again.
+            </p>
           </div>
-          <p className="text-sm text-muted-foreground">
-            Profile details and sign-out will appear here once you can sign in.
-          </p>
+          <AccountSummary />
         </section>
       </div>
     </>

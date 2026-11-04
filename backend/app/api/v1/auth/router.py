@@ -5,6 +5,8 @@ Implements POST /api/v1/auth/google, GET /api/v1/auth/me, and
 POST /api/v1/auth/logout, per the API specification.
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth.auth_service import AuthService
@@ -20,6 +22,8 @@ from app.schemas.user import UserResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+_diag_logger = logging.getLogger("lumora.auth.diagnostics")  # TEMP-DIAG
+
 
 @router.post("/google", response_model=GoogleAuthResponse)
 async def login_with_google(
@@ -28,7 +32,18 @@ async def login_with_google(
 ) -> GoogleAuthResponse:
     try:
         result = await auth_service.authenticate_with_google(payload.google_token)
-    except ValueError:
+    except ValueError as exc:
+        # TEMP-DIAG: tell apart a Google-verification failure from any other
+        # ValueError raised inside authenticate_with_google (all map to this 401).
+        _from_verifier = str(exc).startswith(
+            ("Invalid Google ID token", "Google account email", "Google token did not")
+        )
+        _diag_logger.warning(
+            "GOOGLE_AUTH_DIAG router: POST /auth/google -> 401 INVALID_GOOGLE_TOKEN "
+            "exception_class=%s raised_by_google_verification=%s",
+            type(exc).__name__,
+            _from_verifier,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
