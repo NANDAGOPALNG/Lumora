@@ -88,7 +88,7 @@ router = APIRouter(prefix="/connectors", tags=["connectors"])
 
 
 def get_connector_service(
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_db, scope="function"),
     vector_store: QdrantVectorStore = Depends(get_vector_store),
 ) -> ConnectorService:
     document_service = DocumentService(

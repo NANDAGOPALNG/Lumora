@@ -22,7 +22,7 @@ to be composed by a future SearchService, the same as DenseRetriever.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, Iterable, List, Optional
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -149,3 +149,28 @@ class KeywordRetriever:
             )
             for row in rows
         ]
+
+    async def load_contents(
+        self, chunk_ids: Iterable[UUIDLike], workspace_id: UUIDLike
+    ) -> Dict[UUID, str]:
+        """Return `{chunk_id: content}` for the given chunks that exist in
+        `workspace_id`.
+
+        Used by HybridRetriever to fetch the text of chunks that were found
+        only by vector search (Qdrant payloads carry no text). The workspace
+        is a mandatory filter, so a chunk id from another workspace - or one
+        that no longer exists (a stale vector) - is simply absent from the
+        result and never has its text returned.
+        """
+        workspace_uuid = validate_uuid(workspace_id, "workspace_id")
+        ids = [validate_uuid(chunk_id, "chunk_id") for chunk_id in chunk_ids]
+        if not ids:
+            return {}
+
+        stmt = (
+            select(Chunk.id, Chunk.content)
+            .join(Document, Chunk.document_id == Document.id)
+            .where(Chunk.id.in_(ids), Document.workspace_id == workspace_uuid)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return {row.id: row.content for row in rows}

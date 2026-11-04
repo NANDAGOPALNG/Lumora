@@ -40,7 +40,7 @@ def get_token_manager() -> TokenManager:
 
 
 def get_auth_service(
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_db, scope="function"),
     google_verifier: GoogleOAuthVerifier = Depends(get_google_verifier),
     token_manager: TokenManager = Depends(get_token_manager),
 ) -> AuthService:
@@ -62,7 +62,7 @@ def _unauthorized(message: str) -> HTTPException:
 
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_db, scope="function"),
     token_manager: TokenManager = Depends(get_token_manager),
 ) -> User:
     """Resolve the authenticated user from the request's JWT Bearer token."""
