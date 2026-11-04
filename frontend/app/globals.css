@@ -1,26 +1,143 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Lumora design tokens
+ * Neutrals: cool ink-on-paper. Signal: amber ("lumen"), used sparingly for
+ * focus, the active nav marker and the logo. Primary actions stay ink.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --radius: 0.5rem;
+
+  --background: #fafafb;
+  --foreground: #14161c;
+  --card: #ffffff;
+  --card-foreground: #14161c;
+  --popover: #ffffff;
+  --popover-foreground: #14161c;
+  --primary: #14161c;
+  --primary-foreground: #fafafb;
+  --secondary: #f0f1f4;
+  --secondary-foreground: #14161c;
+  --muted: #f0f1f4;
+  --muted-foreground: #5b6170;
+  --accent: #edeef2;
+  --accent-foreground: #14161c;
+  --destructive: #c8352b;
+  --border: #e4e6eb;
+  --input: #d5d8e0;
+  --ring: #d98e04;
+  --brand: #e8a317;
+  --brand-foreground: #2a1e00;
+  --brand-muted: #fbf1d9;
+
+  --sidebar: #f4f5f7;
+  --sidebar-foreground: #333845;
+  --sidebar-border: #e4e6eb;
+  --sidebar-accent: #e9ebf0;
+}
+
+.dark {
+  --background: #0f1115;
+  --foreground: #eceef2;
+  --card: #151820;
+  --card-foreground: #eceef2;
+  --popover: #1a1e27;
+  --popover-foreground: #eceef2;
+  --primary: #eceef2;
+  --primary-foreground: #0f1115;
+  --secondary: #1d212b;
+  --secondary-foreground: #eceef2;
+  --muted: #1d212b;
+  --muted-foreground: #9097a6;
+  --accent: #212633;
+  --accent-foreground: #eceef2;
+  --destructive: #f0645a;
+  --border: #242833;
+  --input: #303644;
+  --ring: #f2b230;
+  --brand: #f2b230;
+  --brand-foreground: #2a1e00;
+  --brand-muted: #2b2412;
+
+  --sidebar: #0c0e12;
+  --sidebar-foreground: #c5c9d4;
+  --sidebar-border: #1d212a;
+  --sidebar-accent: #1a1e27;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-muted: var(--brand-muted);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent: var(--sidebar-accent);
+
+  /* Radius scale: controls (md) < panels (xl) < overlays (2xl) */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+
+  --font-sans: "Hanken Grotesk Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Newsreader Variable", ui-serif, Georgia, serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--brand) 35%, transparent);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
