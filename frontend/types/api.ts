@@ -44,7 +44,15 @@ export interface WorkspaceResponse {
 }
 
 export interface WorkspaceCreate {
-  name: string; // 1-100 characters
+  name: string; // 1-100 characters (trimmed by the backend)
+}
+
+export interface WorkspaceUpdate {
+  name: string; // 1-100 characters (trimmed by the backend)
+}
+
+export interface MessageResponse {
+  message: string;
 }
 
 export type DocumentStatus = "Uploaded" | "Processing" | "Indexed" | "Failed";
