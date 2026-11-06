@@ -111,3 +111,96 @@ export async function apiFetch<T>(
     );
   }
 }
+
+export interface UploadOptions {
+  /** Called with the fraction (0-1) of the request body sent so far. */
+  onProgress?: (fraction: number) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * POST multipart form data with upload progress. fetch cannot report upload
+ * progress, so this uses XMLHttpRequest while keeping the same behaviour as
+ * apiFetch: Bearer token, error-envelope parsing, and 401 session handling.
+ * Content-Type is deliberately left unset so the browser adds the multipart boundary.
+ */
+export function apiUpload<T>(
+  path: string,
+  form: FormData,
+  { onProgress, signal }: UploadOptions = {},
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let url: string;
+    try {
+      url = `${getBaseUrl()}${path}`;
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    if (signal?.aborted) {
+      reject(new DOMException("The upload was cancelled.", "AbortError"));
+      return;
+    }
+
+    const tokenUsed = getAccessToken();
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Accept", "application/json");
+    if (tokenUsed) xhr.setRequestHeader("Authorization", `Bearer ${tokenUsed}`);
+
+    const onAbort = () => xhr.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const finish = () => signal?.removeEventListener("abort", onAbort);
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onProgress?.(event.loaded / event.total);
+    };
+
+    xhr.onload = () => {
+      finish();
+      let data: unknown;
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        data = undefined;
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (data === undefined) {
+          reject(new ApiError(xhr.status, "UNEXPECTED_RESPONSE", "The server returned an unreadable response."));
+        } else {
+          resolve(data as T);
+        }
+        return;
+      }
+
+      const envelope = data as Partial<ApiErrorEnvelope> | undefined;
+      const error =
+        envelope?.error?.code && envelope.error.message
+          ? new ApiError(xhr.status, envelope.error.code, envelope.error.message)
+          : new ApiError(
+              xhr.status,
+              "UNEXPECTED_RESPONSE",
+              `The server returned an unexpected response (${xhr.status}).`,
+            );
+      if (xhr.status === 401 && getAccessToken() === tokenUsed) {
+        clearAccessToken();
+        unauthorizedHandler?.();
+      }
+      reject(error);
+    };
+
+    xhr.onerror = () => {
+      finish();
+      reject(
+        new ApiError(0, NETWORK_ERROR, "Can't reach the Lumora server. Check your connection and try again."),
+      );
+    };
+    xhr.onabort = () => {
+      finish();
+      reject(new DOMException("The upload was cancelled.", "AbortError"));
+    };
+
+    xhr.send(form);
+  });
+}

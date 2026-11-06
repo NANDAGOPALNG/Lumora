@@ -15,7 +15,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { DeleteWorkspaceDialog } from "@/components/workspaces/delete-workspace-dialog";
 import { RenameWorkspaceDialog } from "@/components/workspaces/rename-workspace-dialog";
 import { WorkspaceDetailSkeleton } from "@/components/workspaces/workspace-skeletons";
-import { WorkspaceDocumentsSection } from "@/components/workspaces/workspace-documents-section";
+import { WorkspaceDocuments } from "@/components/documents/workspace-documents";
 
 function BackLink() {
   return (
@@ -128,7 +128,7 @@ export function WorkspaceDetailView({ workspaceId }: { workspaceId: string }) {
           </div>
         </dl>
 
-        <WorkspaceDocumentsSection />
+        <WorkspaceDocuments workspaceId={workspace.id} />
       </div>
 
       <RenameWorkspaceDialog workspace={workspace} open={renameOpen} onOpenChange={setRenameOpen} />

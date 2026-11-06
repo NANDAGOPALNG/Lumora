@@ -27,12 +27,14 @@ describe("workspace detail", () => {
     expect(screen.getByRole("link", { name: /All workspaces/ }).getAttribute("href")).toBe("/workspaces");
   });
 
-  it("does not claim the workspace has no documents (listing isn't connected yet)", async () => {
+  it("shows this workspace's real documents section with an empty state when it has none", async () => {
+    // Phase 4 replaced the Phase 3 placeholder ("Documents aren't shown here yet") with the real section.
     createFakeBackend({ workspaces: seed() });
     renderApp(<WorkspaceDetailView workspaceId={uuid(3)} />);
     await screen.findByRole("heading", { level: 1, name: "Research" });
-    expect(screen.getByText("Documents aren’t shown here yet")).toBeTruthy();
-    expect(screen.queryByText(/no documents/i)).toBeNull();
+    expect(await screen.findByText("No documents yet")).toBeTruthy();
+    expect(screen.queryByText("Documents aren’t shown here yet")).toBeNull();
+    expect(screen.getByRole("button", { name: "Choose files" })).toBeTruthy();
   });
 
   it("handles a malformed workspace ID without calling the workspace API", async () => {

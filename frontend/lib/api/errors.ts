@@ -12,6 +12,21 @@ export function describeApiError(error: unknown): string {
   if (error.code === "WORKSPACE_NOT_FOUND") {
     return "This workspace no longer exists. It may have been deleted.";
   }
+  if (error.code === "DOCUMENT_NOT_FOUND") {
+    return "This document no longer exists. It may have been deleted.";
+  }
+  if (error.code === "UNSUPPORTED_FILE_TYPE") {
+    return "This file type isn’t supported. Upload PDF, DOCX, TXT or MD files.";
+  }
+  if (error.code === "FILE_TOO_LARGE") {
+    // The backend message states its limit in bytes, e.g. "...maximum allowed size of 20971520 bytes".
+    const bytes = Number(error.message.match(/(\d+)\s*bytes/)?.[1]);
+    const limit = Number.isFinite(bytes) && bytes > 0 ? ` (limit ${Math.round(bytes / 1024 / 1024)} MB)` : "";
+    return `This file is larger than the server allows${limit}.`;
+  }
+  if (error.code === "INGESTION_FAILED") {
+    return "Indexing failed. The file may contain no readable text (for example a scanned PDF) or may be damaged. You can try again.";
+  }
   if (error.code === "VALIDATION_ERROR") {
     // The backend only says "Invalid request"; the usual cause is the name rules.
     return "The server rejected this request. Names must be 1–100 characters.";
