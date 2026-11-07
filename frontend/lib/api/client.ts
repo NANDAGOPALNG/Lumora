@@ -101,6 +101,9 @@ export async function apiFetch<T>(
     throw error;
   }
 
+  // 204 No Content (e.g. deleting a conversation) has no body to parse.
+  if (response.status === 204) return undefined as T;
+
   try {
     return (await response.json()) as T;
   } catch {

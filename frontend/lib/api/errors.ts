@@ -27,6 +27,18 @@ export function describeApiError(error: unknown): string {
   if (error.code === "INGESTION_FAILED") {
     return "Indexing failed. The file may contain no readable text (for example a scanned PDF) or may be damaged. You can try again.";
   }
+  if (error.code === "CONVERSATION_NOT_FOUND") {
+    return "This conversation no longer exists. It may have been deleted.";
+  }
+  if (error.code === "TOO_MANY_REQUESTS") {
+    return "The assistant is busy right now. Wait a moment and try again.";
+  }
+  if (error.code === "LLM_GENERATION_FAILED") {
+    return "The assistant couldn’t generate an answer. Please try again.";
+  }
+  if (error.code === "INVALID_CHAT_REQUEST") {
+    return "That message couldn’t be processed. Check it and try again.";
+  }
   if (error.code === "VALIDATION_ERROR") {
     // The backend only says "Invalid request"; the usual cause is the name rules.
     return "The server rejected this request. Names must be 1–100 characters.";

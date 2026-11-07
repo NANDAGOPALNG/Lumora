@@ -10,3 +10,6 @@ export const formatDate = (iso: string) => format(iso, { dateStyle: "medium" });
 
 export const formatDateTime = (iso: string) =>
   format(iso, { dateStyle: "long", timeStyle: "short" });
+
+export const formatShortDateTime = (iso: string) =>
+  format(iso, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });

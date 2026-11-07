@@ -1,5 +1,12 @@
 import { vi } from "vitest";
-import type { DocumentResponse, DocumentStatus, UserResponse, WorkspaceResponse } from "@/types/api";
+import type {
+  ChatMessage,
+  DocumentResponse,
+  DocumentStatus,
+  SearchSource,
+  UserResponse,
+  WorkspaceResponse,
+} from "@/types/api";
 import { apiError, json, USER } from "./helpers";
 
 export const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -33,6 +40,46 @@ export function document(
   };
 }
 
+export function source(n: number, filename: string, overrides: Partial<SearchSource> = {}): SearchSource {
+  return {
+    chunk_id: uuid(7000 + n),
+    document_id: uuid(1000 + n),
+    filename,
+    source: filename.split(".").pop() ?? "txt",
+    chunk_index: n,
+    score: 0.5,
+    content: `Excerpt from ${filename}`,
+    ...overrides,
+  };
+}
+
+export interface SeedConversation {
+  id: string;
+  user_id: string;
+  title: string | null;
+  created_at: string;
+  messages: ChatMessage[];
+}
+
+export function conversation(
+  n: number,
+  turns: Array<[question: string, answer: string]>,
+  userId = USER.id,
+  createdAt?: string,
+): SeedConversation {
+  const created = createdAt ?? `2026-10-${String(n).padStart(2, "0")}T09:00:00+00:00`;
+  return {
+    id: uuid(8000 + n),
+    user_id: userId,
+    title: null,
+    created_at: created,
+    messages: turns.flatMap(([question, answer], index) => [
+      { id: uuid(9000 + n * 100 + index * 2), role: "user", content: question, created_at: created },
+      { id: uuid(9000 + n * 100 + index * 2 + 1), role: "assistant", content: answer, created_at: created },
+    ]),
+  };
+}
+
 export interface Call {
   method: string;
   path: string;
@@ -55,12 +102,14 @@ const ALLOWED_TYPES = ["pdf", "docx", "txt", "md"];
 export function createFakeBackend(options: {
   workspaces?: WorkspaceResponse[];
   documents?: DocumentResponse[];
+  conversations?: SeedConversation[];
   /** Maps an access token to the user it belongs to. Default: any token is USER. */
   users?: Record<string, UserResponse>;
 } = {}) {
   const state = {
     workspaces: [...(options.workspaces ?? [])],
     documents: [...(options.documents ?? [])],
+    conversations: [...(options.conversations ?? [])],
     calls: [] as Call[],
     down: false,
     maxUploadBytes: 20 * 1024 * 1024,
@@ -75,6 +124,15 @@ export function createFakeBackend(options: {
     override: null as null | ((call: Call) => Response | null),
     nextId: 100,
     nextDocId: 5000,
+    /** Held before a chat answer is returned, so tests can observe the in-flight state. */
+    chatGate: null as null | (() => Promise<void>),
+    /** Produces the answer (and sources) for a chat request. */
+    chatAnswer: ((query: string): { answer: string; sources: SearchSource[] } => ({
+      answer: `Answer to: ${query}`,
+      sources: [],
+    })) as (query: string, body: Record<string, unknown>) => { answer: string; sources: SearchSource[] },
+    nextConversationId: 8500,
+    nextMessageId: 20000,
   };
 
   const userFor = (authorization?: string): UserResponse | null => {
@@ -202,6 +260,66 @@ export function createFakeBackend(options: {
       if (!docMatch[2] && call.method === "DELETE") {
         state.documents = state.documents.filter((d) => d.id !== target.id);
         return json(200, { message: "Document deleted successfully" });
+      }
+    }
+
+    // ---- chat ----
+    const mineConversations = () => state.conversations.filter((c) => c.user_id === user.id);
+    const chatMatch = call.path.match(/^\/api\/v1\/chat\/([^/]+)$/);
+
+    if (call.path === "/api/v1/chat" && call.method === "POST") {
+      const body = (call.body ?? {}) as Record<string, unknown>;
+      if (!ownsWorkspace(String(body.workspace_id))) {
+        return apiError(404, "WORKSPACE_NOT_FOUND", "Workspace not found");
+      }
+      let target = body.conversation_id
+        ? mineConversations().find((c) => c.id === body.conversation_id)
+        : undefined;
+      if (body.conversation_id && !target) {
+        return apiError(404, "CONVERSATION_NOT_FOUND", "Conversation not found");
+      }
+      if (typeof body.query !== "string" || !body.query.trim()) {
+        return apiError(400, "INVALID_CHAT_REQUEST", "query must be a non-empty string");
+      }
+      await state.chatGate?.();
+      const query = body.query.trim();
+      const { answer, sources } = state.chatAnswer(query, body);
+      if (!target) {
+        target = {
+          id: uuid(state.nextConversationId++),
+          user_id: user.id,
+          title: null,
+          created_at: new Date().toISOString(),
+          messages: [],
+        };
+        state.conversations.push(target);
+      }
+      const now = new Date().toISOString();
+      target.messages.push(
+        { id: uuid(state.nextMessageId++), role: "user", content: query, created_at: now },
+        { id: uuid(state.nextMessageId++), role: "assistant", content: answer, created_at: now },
+      );
+      return json(200, { answer, query: query.toLowerCase(), conversation_id: target.id, sources });
+    }
+
+    if (call.path === "/api/v1/chat/history" && call.method === "GET") {
+      return json(
+        200,
+        [...mineConversations()]
+          .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+          .map(({ id, title, created_at }) => ({ id, title, created_at })),
+      );
+    }
+
+    if (chatMatch) {
+      const found = mineConversations().find((c) => c.id === chatMatch[1]);
+      if (!found) return apiError(404, "CONVERSATION_NOT_FOUND", "Conversation not found");
+      if (call.method === "GET") {
+        return json(200, { id: found.id, title: found.title, created_at: found.created_at, messages: found.messages });
+      }
+      if (call.method === "DELETE") {
+        state.conversations = state.conversations.filter((c) => c.id !== found.id);
+        return new Response(null, { status: 204 }); // the real endpoint returns no body
       }
     }
 

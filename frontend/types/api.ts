@@ -67,3 +67,52 @@ export interface DocumentResponse {
   chunk_count: number;
   uploaded_at: IsoDateTime;
 }
+
+/** One retrieved chunk the answer drew on (SearchSourceResponse). */
+export interface SearchSource {
+  chunk_id: Uuid;
+  document_id: Uuid;
+  filename: string;
+  /** The document's file type (e.g. "pdf"). */
+  source: string;
+  chunk_index: number;
+  /** Cross-encoder relevance score; its scale isn't documented, so it is shown as-is. */
+  score: number;
+  content?: string | null;
+}
+
+export interface ChatRequest {
+  query: string;
+  workspace_id: Uuid;
+  conversation_id?: Uuid;
+  document_id?: Uuid;
+  top_k?: number;
+}
+
+export interface ChatResponse {
+  answer: string;
+  /** The normalised query actually used for retrieval. */
+  query: string;
+  conversation_id: Uuid;
+  sources: SearchSource[];
+}
+
+export interface ConversationSummary {
+  id: Uuid;
+  title: string | null;
+  created_at: IsoDateTime;
+}
+
+export interface ChatMessage {
+  id: Uuid;
+  role: string; // "user" | "assistant"
+  content: string;
+  created_at: IsoDateTime;
+}
+
+export interface ConversationDetail {
+  id: Uuid;
+  title: string | null;
+  created_at: IsoDateTime;
+  messages: ChatMessage[];
+}
