@@ -36,6 +36,9 @@ export function describeApiError(error: unknown): string {
   if (error.code === "LLM_GENERATION_FAILED") {
     return "The assistant couldn’t generate an answer. Please try again.";
   }
+  if (error.code === "INVALID_SEARCH_REQUEST") {
+    return "That search couldn’t be processed. Check your query and try again.";
+  }
   if (error.code === "INVALID_CHAT_REQUEST") {
     return "That message couldn’t be processed. Check it and try again.";
   }

@@ -116,3 +116,20 @@ export interface ConversationDetail {
   created_at: IsoDateTime;
   messages: ChatMessage[];
 }
+
+export interface SearchRequest {
+  query: string;
+  workspace_id: Uuid;
+  document_id?: Uuid;
+  /** 1-50; the backend defaults to 5. */
+  top_k?: number;
+}
+
+export interface SearchResponse {
+  /** The normalised query actually used for retrieval. */
+  query: string;
+  /** The assembled context built from the results. It is not an independent result. */
+  context: string;
+  /** Retrieved passages, best first. */
+  sources: SearchSource[];
+}

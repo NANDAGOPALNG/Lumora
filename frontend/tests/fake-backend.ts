@@ -131,6 +131,13 @@ export function createFakeBackend(options: {
       answer: `Answer to: ${query}`,
       sources: [],
     })) as (query: string, body: Record<string, unknown>) => { answer: string; sources: SearchSource[] },
+    /** Held before a search returns, so tests can observe the in-flight state. */
+    searchGate: null as null | (() => Promise<void>),
+    /** Produces the passages for a search request. */
+    searchResults: ((): SearchSource[] => [
+      source(1, "alpha.pdf", { chunk_index: 2, score: 0.8731, content: "Alpha passage about authentication." }),
+      source(2, "beta.md", { chunk_index: 0, score: 0.4123, content: "Beta passage." }),
+    ]) as (body: Record<string, unknown>) => SearchSource[],
     nextConversationId: 8500,
     nextMessageId: 20000,
   };
@@ -261,6 +268,31 @@ export function createFakeBackend(options: {
         state.documents = state.documents.filter((d) => d.id !== target.id);
         return json(200, { message: "Document deleted successfully" });
       }
+    }
+
+    // ---- search ----
+    if (call.path === "/api/v1/search" && call.method === "POST") {
+      const body = (call.body ?? {}) as Record<string, unknown>;
+      if (!ownsWorkspace(String(body.workspace_id))) {
+        return apiError(404, "WORKSPACE_NOT_FOUND", "Workspace not found");
+      }
+      const topK = body.top_k === undefined ? 5 : body.top_k;
+      if (typeof topK !== "number" || !Number.isInteger(topK) || topK < 1 || topK > 50) {
+        return apiError(422, "VALIDATION_ERROR", "Invalid request");
+      }
+      if (typeof body.query !== "string" || !body.query.trim()) {
+        return apiError(400, "INVALID_SEARCH_REQUEST", "query must be a non-empty string");
+      }
+      await state.searchGate?.();
+      let sources = state.searchResults(body);
+      if (typeof body.document_id === "string") {
+        sources = sources.filter((s) => s.document_id === body.document_id);
+      }
+      return json(200, {
+        query: body.query.trim().replace(/\s+/g, " "),
+        context: "[1] assembled context text",
+        sources: sources.slice(0, topK),
+      });
     }
 
     // ---- chat ----
