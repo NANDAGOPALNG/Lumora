@@ -36,6 +36,22 @@ export function describeApiError(error: unknown): string {
   if (error.code === "LLM_GENERATION_FAILED") {
     return "The assistant couldn’t generate an answer. Please try again.";
   }
+  // Fixed wording (not the raw backend text) for anything involving a credential.
+  if (error.code === "INVALID_GITHUB_CREDENTIALS") {
+    return "GitHub didn’t accept the token. Check that it is valid, hasn’t expired and can read this repository.";
+  }
+  if (error.code === "GITHUB_REPOSITORY_NOT_FOUND") {
+    return "GitHub couldn’t find that repository, or the token doesn’t have access to it.";
+  }
+  if (error.code === "CONNECTOR_NOT_FOUND") {
+    return "This connection no longer exists. It may have been removed.";
+  }
+  if (error.code === "CONNECTOR_MISSING_REPOSITORY") {
+    return "This connection has no stored repository. Disconnect it and connect the repository again.";
+  }
+  if (error.code === "UNSUPPORTED_CONNECTOR_TYPE") {
+    return "This kind of connection can’t be synced from here.";
+  }
   if (error.code === "INVALID_SEARCH_REQUEST") {
     return "That search couldn’t be processed. Check your query and try again.";
   }

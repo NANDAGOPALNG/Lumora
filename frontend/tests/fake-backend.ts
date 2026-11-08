@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type {
   ChatMessage,
+  ConnectorResponse,
   DocumentResponse,
   DocumentStatus,
   SearchSource,
@@ -49,6 +50,26 @@ export function source(n: number, filename: string, overrides: Partial<SearchSou
     chunk_index: n,
     score: 0.5,
     content: `Excerpt from ${filename}`,
+    ...overrides,
+  };
+}
+
+export function connector(
+  n: number,
+  workspaceN: number,
+  repo: string,
+  overrides: Partial<ConnectorResponse> = {},
+): ConnectorResponse {
+  return {
+    id: uuid(6000 + n),
+    workspace_id: uuid(workspaceN),
+    type: "github",
+    connection_name: repo,
+    github_repo: repo,
+    drive_account_email: null,
+    drive_root_folder_id: null,
+    last_synced: null,
+    active: true,
     ...overrides,
   };
 }
@@ -103,6 +124,7 @@ export function createFakeBackend(options: {
   workspaces?: WorkspaceResponse[];
   documents?: DocumentResponse[];
   conversations?: SeedConversation[];
+  connectors?: ConnectorResponse[];
   /** Maps an access token to the user it belongs to. Default: any token is USER. */
   users?: Record<string, UserResponse>;
 } = {}) {
@@ -110,6 +132,7 @@ export function createFakeBackend(options: {
     workspaces: [...(options.workspaces ?? [])],
     documents: [...(options.documents ?? [])],
     conversations: [...(options.conversations ?? [])],
+    connectors: (options.connectors ?? []).map((c) => ({ ...c })),
     calls: [] as Call[],
     down: false,
     maxUploadBytes: 20 * 1024 * 1024,
@@ -138,6 +161,13 @@ export function createFakeBackend(options: {
       source(1, "alpha.pdf", { chunk_index: 2, score: 0.8731, content: "Alpha passage about authentication." }),
       source(2, "beta.md", { chunk_index: 0, score: 0.4123, content: "Beta passage." }),
     ]) as (body: Record<string, unknown>) => SearchSource[],
+    /** The only GitHub token the fake accepts. */
+    validGitHubToken: "ghp_valid",
+    /** Held before a connect finishes, so tests can observe the in-flight state. */
+    connectGate: null as null | (() => Promise<void>),
+    /** Held before a sync finishes, so tests can observe the in-flight state. */
+    syncGate: null as null | (() => Promise<void>),
+    nextConnectorId: 6500,
     nextConversationId: 8500,
     nextMessageId: 20000,
   };
@@ -267,6 +297,86 @@ export function createFakeBackend(options: {
       if (!docMatch[2] && call.method === "DELETE") {
         state.documents = state.documents.filter((d) => d.id !== target.id);
         return json(200, { message: "Document deleted successfully" });
+      }
+    }
+
+    // ---- connectors ----
+    const mineConnectors = () => state.connectors.filter((c) => ownsWorkspace(c.workspace_id));
+    const githubTokenProblem = (token: unknown): Response | null =>
+      token === state.validGitHubToken
+        ? null
+        : apiError(400, "INVALID_GITHUB_CREDENTIALS", "Invalid or expired GitHub token");
+
+    if (call.path === "/api/v1/connectors" && call.method === "GET") {
+      const workspaceId = call.query.get("workspace_id") ?? "";
+      if (!ownsWorkspace(workspaceId)) return apiError(404, "WORKSPACE_NOT_FOUND", "Workspace not found");
+      return json(200, mineConnectors().filter((c) => c.workspace_id === workspaceId));
+    }
+
+    if (call.path === "/api/v1/connectors/github" && call.method === "POST") {
+      const body = (call.body ?? {}) as Record<string, unknown>;
+      if (!ownsWorkspace(String(body.workspace_id))) {
+        return apiError(404, "WORKSPACE_NOT_FOUND", "Workspace not found");
+      }
+      const repo = typeof body.repo_full_name === "string" ? body.repo_full_name.trim() : "";
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) || typeof body.github_token !== "string") {
+        return apiError(422, "VALIDATION_ERROR", "Invalid request");
+      }
+      const problem = githubTokenProblem(body.github_token);
+      if (problem) return problem;
+      if (repo.includes("missing")) {
+        return apiError(404, "GITHUB_REPOSITORY_NOT_FOUND", `Repository '${repo}' was not found or is not accessible`);
+      }
+      await state.connectGate?.();
+      const created = connector(state.nextConnectorId++, 0, repo, {
+        workspace_id: String(body.workspace_id),
+        connection_name: typeof body.connection_name === "string" && body.connection_name ? body.connection_name : repo,
+      });
+      state.connectors.push(created);
+      return json(201, created);
+    }
+
+    const connectorMatch = call.path.match(/^\/api\/v1\/connectors\/([^/]+)(\/sync)?$/);
+    if (connectorMatch) {
+      const target = mineConnectors().find((c) => c.id === connectorMatch[1]);
+      if (!target) return apiError(404, "CONNECTOR_NOT_FOUND", "Connector not found");
+      if (connectorMatch[2] && call.method === "POST") {
+        if (!target.github_repo) {
+          return apiError(400, "CONNECTOR_MISSING_REPOSITORY", "Connector has no stored repository - reconnect it");
+        }
+        const problem = githubTokenProblem((call.body as { github_token?: unknown } | undefined)?.github_token);
+        if (problem) return problem;
+        await state.syncGate?.();
+        // Like the real sync: imports files through the normal pipeline, so they appear as indexed documents.
+        for (const path of ["docs/README.md", "docs/guide.md"]) {
+          state.documents.push({
+            id: uuid(state.nextDocId++),
+            workspace_id: target.workspace_id,
+            filename: path,
+            file_type: "md",
+            file_size: 1200,
+            status: "Indexed",
+            chunk_count: 4,
+            uploaded_at: new Date().toISOString(),
+          });
+        }
+        target.last_synced = new Date().toISOString();
+        return json(200, {
+          connector_id: target.id,
+          repository: target.github_repo,
+          files_discovered: 3,
+          files_added: 2,
+          files_updated: 0,
+          files_deleted: 0,
+          files_unchanged: 1,
+          files_skipped: 0,
+          status: "completed",
+        });
+      }
+      if (!connectorMatch[2] && call.method === "DELETE") {
+        // Documents already imported are kept, as in the backend (connector_id becomes NULL).
+        state.connectors = state.connectors.filter((c) => c.id !== target.id);
+        return new Response(null, { status: 204 });
       }
     }
 

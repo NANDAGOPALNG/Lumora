@@ -133,3 +133,42 @@ export interface SearchResponse {
   /** Retrieved passages, best first. */
   sources: SearchSource[];
 }
+
+/** Safe connector metadata; the backend never returns or stores a credential. */
+export interface ConnectorResponse {
+  id: Uuid;
+  workspace_id: Uuid;
+  type: string;
+  connection_name: string;
+  /** Canonical "owner/repo"; null for non-GitHub connectors and very old GitHub ones. */
+  github_repo: string | null;
+  drive_account_email: string | null;
+  drive_root_folder_id: string | null;
+  last_synced: IsoDateTime | null;
+  active: boolean;
+}
+
+/** Request bodies carry the GitHub token. These types must never be used as cache keys or stored. */
+export interface GitHubConnectorCreate {
+  workspace_id: Uuid;
+  repo_full_name: string;
+  github_token: string;
+  connection_name?: string;
+}
+
+export interface GitHubSyncRequest {
+  github_token: string;
+}
+
+export interface GitHubSyncResponse {
+  connector_id: Uuid;
+  repository: string;
+  files_discovered: number;
+  files_added: number;
+  files_updated: number;
+  files_deleted: number;
+  files_unchanged: number;
+  files_skipped: number;
+  /** Always "completed" today: the backend returns a finished summary, not live progress. */
+  status: string;
+}

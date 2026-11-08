@@ -16,7 +16,7 @@ import type { UploadOptions } from "@/lib/api/client";
 import { documentsRefetchInterval, sortDocuments } from "@/lib/documents";
 
 /** Keys include the user id (like workspaces) so cached documents never cross sessions. */
-const documentsKey = (userId: string | null, workspaceId: string): QueryKey => [
+export const documentsKey = (userId: string | null, workspaceId: string): QueryKey => [
   "documents",
   userId ?? "anonymous",
   workspaceId,
