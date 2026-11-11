@@ -8,7 +8,6 @@ WorkspaceRepository), never by fetching a row and comparing ownership
 in Python afterward.
 """
 
-import asyncio
 from typing import List, Optional
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
@@ -255,14 +254,15 @@ class DocumentService:
             ]
 
             # Embed first - before any chunk row is deleted or replaced.
-            # If the embedding model fails, the document's existing chunks
+            # If the embedding API fails, the document's existing chunks
             # and Qdrant points are still exactly as they were (previously
             # the chunks were replaced and committed first, leaving new
-            # PostgreSQL chunks beside old, orphaned vectors). The model
-            # call is CPU-bound, so it runs off the event loop; embed_texts
-            # serializes model access internally.
-            vectors = await asyncio.to_thread(
-                embed_texts, [chunk_row.content for chunk_row in chunk_rows]
+            # PostgreSQL chunks beside old, orphaned vectors).
+            # Passage task is used for document chunks (vs. retrieval.query
+            # for user search queries).
+            vectors = await embed_texts(
+                [chunk_row.content for chunk_row in chunk_rows],
+                task="retrieval.passage",
             )
 
             # A SAVEPOINT: if anything in this block fails, only the chunk

@@ -37,8 +37,12 @@ class Settings(BaseSettings):
     chunk_overlap: int = 150
 
     # Embeddings
-    embedding_model_name: str = "BAAI/bge-m3"
+    embedding_model_name: str = "jina-embeddings-v3"
     embedding_batch_size: int = 32
+
+    # Jina AI (remote Embeddings API – replaces local BGE-M3)
+    jina_api_key: Optional[str] = None
+    jina_embedding_url: str = "https://api.jina.ai/v1/embeddings"
 
     # Reranking
     reranker_model_name: str = "BAAI/bge-reranker-base"

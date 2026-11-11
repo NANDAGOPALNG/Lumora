@@ -1,4 +1,4 @@
-"""Embedding engine: text -> BGE-M3 dense vectors.
+"""Embedding engine: text -> Jina AI dense vectors.
 
 Reusable module only - not connected to the database, Qdrant, or any
 API route. See `engine.py` for `embed_text` / `embed_texts`.
