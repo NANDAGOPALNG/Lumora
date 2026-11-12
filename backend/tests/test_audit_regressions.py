@@ -9,6 +9,7 @@ R5  a failed end-of-request COMMIT must not be reported as success
 """
 
 import asyncio
+import json
 import os
 import time
 import uuid
@@ -50,9 +51,37 @@ class _NoKeywordHits(KeywordRetriever):
         return []
 
 
-class _LengthScoringModel:
-    def predict(self, pairs):
-        return [float(len(text)) for _, text in pairs]
+def _install_jina_reranker(monkeypatch, *, delay=0.0):
+    """Mock the Jina Reranker API: scores each document by its length.
+
+    `delay` makes the (awaited) HTTP call slow, to prove the event loop is
+    not blocked while reranking.
+    """
+    monkeypatch.setenv("JINA_API_KEY", "test-jina-key")
+
+    async def handler(request):
+        if delay:
+            await asyncio.sleep(delay)
+        documents = json.loads(request.content)["documents"]
+        return httpx.Response(
+            200,
+            json={"results": [{"index": i, "relevance_score": float(len(text))} for i, text in enumerate(documents)]},
+        )
+
+    monkeypatch.setattr(
+        reranker_module,
+        "_new_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+
+def _async_embed_text(delay=0.0):
+    async def embed_text(query, task="retrieval.query"):
+        if delay:
+            await asyncio.sleep(delay)
+        return [0.1, 0.2, 0.3]
+
+    return embed_text
 
 
 def _point(chunk_id, document_id, workspace_id, filename="doc.txt"):
@@ -119,8 +148,8 @@ async def _max_loop_gap_during(coro, tick=0.02):
 # --------------------------------------------------------------------------- R1
 
 def test_r1_vector_only_hits_reach_the_context_and_stale_or_foreign_ones_do_not(harness, monkeypatch):
-    monkeypatch.setattr(dense_module, "embed_text", lambda q: [0.1, 0.2, 0.3])
-    monkeypatch.setattr(reranker_module, "_load_model", lambda: _LengthScoringModel())
+    monkeypatch.setattr(dense_module, "embed_text", _async_embed_text())
+    _install_jina_reranker(monkeypatch)
 
     own_text = "Employees receive 25 days of annual leave per year."
     secret_text = "Confidential: another workspace's salary table."
@@ -179,11 +208,11 @@ def test_r2_reindex_does_not_block_the_event_loop(harness, monkeypatch):
         headers=headers,
     ).json()["id"]
 
-    def blocking_embed(texts):  # stands in for CPU-bound model.encode
-        time.sleep(0.8)
-        return fake_embed_texts(texts)
+    async def slow_embed(texts, task="retrieval.passage", batch_size=None):
+        await asyncio.sleep(0.8)  # a slow remote embedding call must be awaited, not blocking
+        return await fake_embed_texts(texts)
 
-    monkeypatch.setattr(document_service_module, "embed_texts", blocking_embed)
+    monkeypatch.setattr(document_service_module, "embed_texts", slow_embed)
 
     async def scenario():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as client:
@@ -197,17 +226,9 @@ def test_r2_reindex_does_not_block_the_event_loop(harness, monkeypatch):
 def test_r2_search_embedding_and_reranking_do_not_block_the_event_loop(harness, monkeypatch):
     own_doc, own_chunk = _seed_chunk(harness, harness.workspace_a, "hr.txt", "Employees receive 25 days of leave.")
 
-    def blocking_embed_text(query):
-        time.sleep(0.6)
-        return [0.1, 0.2, 0.3]
-
-    class _BlockingModel:
-        def predict(self, pairs):
-            time.sleep(0.6)
-            return [1.0 for _ in pairs]
-
-    monkeypatch.setattr(dense_module, "embed_text", blocking_embed_text)
-    monkeypatch.setattr(reranker_module, "_load_model", lambda: _BlockingModel())
+    # Slow remote calls for both embedding and reranking: they must be awaited.
+    monkeypatch.setattr(dense_module, "embed_text", _async_embed_text(delay=0.6))
+    _install_jina_reranker(monkeypatch, delay=0.6)
     store = _StoreReturning([_point(own_chunk, own_doc, harness.workspace_a.id, "hr.txt")])
 
     async def scenario():

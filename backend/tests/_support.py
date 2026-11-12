@@ -34,7 +34,8 @@ from app.models.user import User
 from app.models.workspace import Workspace
 
 
-def fake_embed_texts(texts):
+async def fake_embed_texts(texts, task="retrieval.passage", batch_size=None):
+    """Stand-in for the (async) Jina embedding engine: same signature, no network."""
     return [[0.1, 0.2, 0.3] for _ in texts]
 
 

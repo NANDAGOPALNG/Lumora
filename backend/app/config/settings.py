@@ -44,8 +44,10 @@ class Settings(BaseSettings):
     jina_api_key: Optional[str] = None
     jina_embedding_url: str = "https://api.jina.ai/v1/embeddings"
 
-    # Reranking
-    reranker_model_name: str = "BAAI/bge-reranker-base"
+    # Jina AI (remote Reranker API - replaces the local BGE cross-encoder).
+    # Reuses jina_api_key above; no second key is needed.
+    jina_reranker_model_name: str = "jina-reranker-v2-base-multilingual"
+    jina_reranker_url: str = "https://api.jina.ai/v1/rerank"
 
     # Qdrant
     qdrant_url: Optional[str] = None

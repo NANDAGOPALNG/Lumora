@@ -91,7 +91,7 @@ class _SubstringKeywordRetriever:
 
 
 class _PassthroughReranker:
-    def rerank(self, query, candidates, *, top_k=None):
+    async def rerank(self, query, candidates, *, top_k=None):
         ranked = [
             RerankedResult(
                 chunk_id=c.chunk_id, document_id=c.document_id, workspace_id=c.workspace_id,
