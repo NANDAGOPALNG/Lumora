@@ -1,7 +1,7 @@
 """Ingestion pipeline: extract -> clean -> chunk.
 
 This module only produces in-memory chunk data from a document file on
-disk - it does not touch the database (Document/Chunk models,
+disk, or from in-memory file content - it does not touch the database (Document/Chunk models,
 repositories, services) or any API route. Wiring this into the reindex
 flow and persisting Chunk rows is a separate task.
 """
@@ -37,11 +37,37 @@ def extract_chunks(
         parsers.ParsingError: if the file's type is unsupported, it
             can't be read, or it contains no extractable text.
     """
+    parsed = parsers.parse(file_path, file_type)
+    return _chunk_parsed(parsed, chunk_size, chunk_overlap)
+
+
+def extract_chunks_from_bytes(
+    content: bytes,
+    file_type: str,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
+) -> List[IngestedChunk]:
+    """Parse, clean, and chunk in-memory document content.
+
+    Identical to `extract_chunks` for a file with the same content; used
+    when the document comes from object storage rather than a local path.
+
+    Raises:
+        parsers.ParsingError: if the type is unsupported, the content
+            can't be read, or it contains no extractable text.
+    """
+    parsed = parsers.parse_bytes(content, file_type)
+    return _chunk_parsed(parsed, chunk_size, chunk_overlap)
+
+
+def _chunk_parsed(
+    parsed: parsers.ParsedDocument,
+    chunk_size: Optional[int],
+    chunk_overlap: Optional[int],
+) -> List[IngestedChunk]:
     settings = Settings.get_instance()
     size = chunk_size if chunk_size is not None else settings.chunk_size
     overlap = chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
-
-    parsed = parsers.parse(file_path, file_type)
 
     chunks: List[IngestedChunk] = []
     index = 0

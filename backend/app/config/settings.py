@@ -1,4 +1,4 @@
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 from typing import List, Optional
 from enum import Enum
@@ -29,8 +29,22 @@ class Settings(BaseSettings):
     database_url: Optional[str] = None
 
     # Document storage
-    document_storage_path: str = "storage/documents"
+    # "local" (default; development and tests) or "r2" (Cloudflare R2).
+    # Selects where NEW uploads are written. Existing documents are always
+    # read from the provider that owns their storage_path (see app.storage).
+    document_storage_backend: str = "local"
+    document_storage_path: str = "storage/documents"  # local backend only
     max_document_size_mb: int = 20
+
+    # Cloudflare R2 (S3-compatible). Only needed when
+    # DOCUMENT_STORAGE_BACKEND=r2. The two credentials are excluded from
+    # repr() so they can't leak through a logged Settings object.
+    r2_account_id: Optional[str] = None
+    r2_access_key_id: Optional[str] = Field(default=None, repr=False)
+    r2_secret_access_key: Optional[str] = Field(default=None, repr=False)
+    r2_bucket_name: Optional[str] = None
+    # Optional; defaults to https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com
+    r2_endpoint_url: Optional[str] = None
 
     # Ingestion / chunking
     chunk_size: int = 1000

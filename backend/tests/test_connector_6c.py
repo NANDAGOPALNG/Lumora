@@ -67,7 +67,7 @@ async def _get_chunks_for_document(session, document_id):
     return list(result.scalars().all())
 
 
-def _fake_embed_texts(texts):
+async def _fake_embed_texts(texts, task="retrieval.passage", batch_size=None):
     return [[0.1, 0.2, 0.3] for _ in texts]
 
 

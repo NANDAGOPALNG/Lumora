@@ -71,7 +71,8 @@ from app.services.document_service import (
     IngestionFailedError,
     UnsupportedFileTypeError,
 )
-from app.storage import local_storage
+from app.storage.base import StorageError
+from app.storage.factory import get_storage_for_path
 
 # Re-exported so callers (the connectors router) can catch GitHub
 # credential/repository failures without importing app.connectors.base
@@ -616,7 +617,12 @@ class ConnectorService:
             )
             if existing is None:
                 return False
-            local_storage.save_file(existing.storage_path, fetched.content)
+            try:
+                await get_storage_for_path(existing.storage_path).save(
+                    existing.storage_path, fetched.content
+                )
+            except StorageError:
+                return False
             await document_repository.update_for_owner(
                 existing.id, user_id, {"file_size": fetched.size}
             )
@@ -866,9 +872,9 @@ class ConnectorService:
         `existing_document_id`, when given, is the Document this
         connector already owns for this path (a changed file - see
         `sync_github`): its stored content is overwritten in place at
-        its existing storage_path (via the same app.storage.local_storage
-        module DocumentService.upload_document already uses) and it's
-        reindexed under the same document_id, rather than a new Document
+        its existing storage_path - through the storage provider that
+        owns that path (local or R2), so a legacy local document stays
+        local - and it's reindexed under the same document_id, rather than a new Document
         being created. When None (a new file), a new Document is created
         via DocumentService.upload_document with `connector_id` set to
         this connector, so future syncs can find it via
@@ -892,7 +898,12 @@ class ConnectorService:
             )
             if existing is None:
                 return False
-            local_storage.save_file(existing.storage_path, github_file.content)
+            try:
+                await get_storage_for_path(existing.storage_path).save(
+                    existing.storage_path, github_file.content
+                )
+            except StorageError:
+                return False
             await document_repository.update_for_owner(
                 existing.id, user_id, {"file_size": len(github_file.content)}
             )

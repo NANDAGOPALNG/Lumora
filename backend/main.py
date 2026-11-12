@@ -15,6 +15,7 @@ from app.api.v1.search import router as search_router
 from app.api.v1.workspace import router as workspaces_router
 from app.config.settings import Settings
 from app.database.session import dispose_engine
+from app.storage.factory import BACKEND_LOCAL, configured_backend, validate_storage_configuration
 
 # Load settings and configure logging
 settings = Settings.get_instance()
@@ -25,6 +26,16 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Fail fast, with a clear message that names the missing variables (never
+    # their values), if DOCUMENT_STORAGE_BACKEND=r2 is selected but R2 is not
+    # fully configured. Makes no network call.
+    validate_storage_configuration()
+    if settings.is_production() and configured_backend(settings) == BACKEND_LOCAL:
+        logger.warning(
+            "DOCUMENT_STORAGE_BACKEND=local in production: uploaded files are "
+            "kept on this server's disk, which is lost on redeploy/restart on "
+            "ephemeral hosts (e.g. Render Free). Set DOCUMENT_STORAGE_BACKEND=r2."
+        )
     yield
     # Release pooled database connections on shutdown.
     await dispose_engine()

@@ -2,7 +2,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from app.repositories.document_repository import DocumentRepository
-from app.storage import local_storage
+from app.storage.factory import delete_stored_file
 from app.vector_store import QdrantIntegrationError
 from app.repositories.workspace_repository import WorkspaceRepository
 from app.schemas.workspace import WorkspaceCreate, WorkspaceResponse, WorkspaceUpdate
@@ -16,7 +16,7 @@ class WorkspaceService:
         vector_store=None,
     ):
         self.workspace_repository = workspace_repository
-        # Needed only to clean up documents' local files and Qdrant vectors
+        # Needed only to clean up documents' stored files and Qdrant vectors
         # when a workspace is deleted (see delete_workspace_for_user).
         self.document_repository = document_repository
         self.vector_store = vector_store
@@ -93,7 +93,9 @@ class WorkspaceService:
             return False
 
         for document_id, storage_path in artifacts:
-            local_storage.delete_file(storage_path)
+            # Each file is removed from the provider that owns it (local or
+            # R2). Best-effort: the database rows are already gone.
+            await delete_stored_file(storage_path)
             if self.vector_store is not None:
                 try:
                     await self.vector_store.delete_document_chunks(document_id)

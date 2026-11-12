@@ -1,19 +1,25 @@
 """
 Local filesystem storage for uploaded documents.
 
-This is a development-only storage implementation: it writes files
-under a single configured root directory, keyed by document UUID
-rather than the client-supplied filename. There is no provider
-abstraction here (no S3/R2/GCS/Azure) - the project's design
-documents don't specify a cloud object-storage provider, so this
-module only supports what document upload/delete currently need.
+Writes files under a single configured root directory, keyed by document
+UUID rather than the client-supplied filename. This is the storage used for
+development and tests (DOCUMENT_STORAGE_BACKEND=local, the default) and for
+every document stored before Cloudflare R2 support existed - those
+documents' `storage_path` values are absolute filesystem paths and keep
+being read, rewritten and deleted here.
+
+The module-level functions below are the original, synchronous interface
+and are unchanged. `LocalStorage` adapts them to the async `StorageBackend`
+interface (app.storage.base) used by the services.
 """
 
+import asyncio
 import os
 from pathlib import Path
 from uuid import UUID
 
 from app.config.settings import Settings
+from app.storage.base import StorageBackend, StorageError, StorageNotFoundError
 
 
 def _storage_root() -> Path:
@@ -59,3 +65,51 @@ def delete_file(storage_path: str) -> None:
         os.remove(storage_path)
     except FileNotFoundError:
         pass
+
+
+def read_file(storage_path: str) -> bytes:
+    """Read a stored file. Raises FileNotFoundError if it is missing.
+
+    Like `delete_file`, this deliberately does not restrict the path to the
+    current storage root: documents stored before this module was
+    abstracted keep the absolute path they were saved under, and that must
+    stay readable even if DOCUMENT_STORAGE_PATH was later changed. The path
+    comes from the database, never from a client request.
+    """
+    with open(storage_path, "rb") as f:
+        return f.read()
+
+
+class LocalStorage(StorageBackend):
+    """The local filesystem as a `StorageBackend` (blocking I/O runs in a
+    worker thread so the event loop is never blocked)."""
+
+    name = "local"
+
+    def generate_storage_path(self, document_id: UUID, file_type: str) -> str:
+        return generate_storage_path(document_id, file_type)
+
+    async def save(self, storage_path: str, content: bytes) -> None:
+        try:
+            await asyncio.to_thread(save_file, storage_path, content)
+        except ValueError as exc:  # path outside the storage root
+            raise StorageError(str(exc)) from exc
+        except OSError as exc:
+            raise StorageError(f"Local storage write failed: {type(exc).__name__}") from exc
+
+    async def read(self, storage_path: str) -> bytes:
+        try:
+            return await asyncio.to_thread(read_file, storage_path)
+        except FileNotFoundError as exc:
+            raise StorageNotFoundError("Stored file not found") from exc
+        except OSError as exc:
+            raise StorageError(f"Local storage read failed: {type(exc).__name__}") from exc
+
+    async def delete(self, storage_path: str) -> None:
+        try:
+            await asyncio.to_thread(delete_file, storage_path)
+        except OSError as exc:
+            raise StorageError(f"Local storage delete failed: {type(exc).__name__}") from exc
+
+    async def exists(self, storage_path: str) -> bool:
+        return await asyncio.to_thread(os.path.isfile, storage_path)

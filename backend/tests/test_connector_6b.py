@@ -49,7 +49,7 @@ from app.services.connector_service import ConnectorNotFoundError, ConnectorServ
 from app.services.document_service import DocumentService
 
 
-def _fake_embed_texts(texts):
+async def _fake_embed_texts(texts, task="retrieval.passage", batch_size=None):
     """Stands in for the real BAAI/bge-m3 embedding model, which these
     tests never load (no network/model cache access is assumed) -
     mirrors tests/test_connector_sync_wave5b.py's identical fake.

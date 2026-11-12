@@ -6,6 +6,6 @@ later task for wiring this into DocumentService / the reindex endpoint.
 """
 
 from app.ingestion.parsers import ParsingError
-from app.ingestion.pipeline import IngestedChunk, extract_chunks
+from app.ingestion.pipeline import IngestedChunk, extract_chunks, extract_chunks_from_bytes
 
-__all__ = ["extract_chunks", "IngestedChunk", "ParsingError"]
+__all__ = ["extract_chunks", "extract_chunks_from_bytes", "IngestedChunk", "ParsingError"]

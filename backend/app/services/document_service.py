@@ -14,14 +14,18 @@ from datetime import datetime, timezone
 
 from app.config.settings import Settings
 from app.embeddings import embed_texts
-from app.ingestion import extract_chunks
+from app.ingestion import extract_chunks_from_bytes
 from app.models.chunk import Chunk
 from app.models.document import Document, DocumentStatus
 from app.repositories.chunk_repository import ChunkRepository
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.workspace_repository import WorkspaceRepository
 from app.schemas.document import DocumentResponse
-from app.storage import local_storage
+from app.storage.factory import (
+    delete_stored_file,
+    get_storage_for_new_documents,
+    get_storage_for_path,
+)
 from app.vector_store import QdrantChunkPoint, QdrantIntegrationError, QdrantVectorStore
 
 ALLOWED_FILE_TYPES = {"pdf", "docx", "txt", "md"}
@@ -136,8 +140,12 @@ class DocumentService:
             )
 
         document_id = uuid4()
-        storage_path = local_storage.generate_storage_path(document_id, file_type)
-        local_storage.save_file(storage_path, content)
+        # New uploads go to the configured provider (local or R2). A
+        # StorageError here means nothing was stored, so there is nothing
+        # to clean up.
+        storage = get_storage_for_new_documents()
+        storage_path = storage.generate_storage_path(document_id, file_type)
+        await storage.save(storage_path, content)
 
         try:
             document = Document(
@@ -155,7 +163,9 @@ class DocumentService:
             created = await self.document_repository.create(document)
         except Exception:
             # Never leave an orphaned file if the DB transaction failed.
-            local_storage.delete_file(storage_path)
+            # Only the object just written (whose key is this new UUID) is
+            # removed - never any pre-existing file.
+            await delete_stored_file(storage_path)
             raise
 
         return DocumentResponse.model_validate(created)
@@ -179,7 +189,8 @@ class DocumentService:
 
     async def delete_document_for_user(self, document_id: UUID, user_id: UUID) -> bool:
         """Delete a document: its PostgreSQL row (chunks cascade), its
-        locally stored file, and its Qdrant vectors.
+        stored file (removed from whichever provider owns it - local disk or
+        R2 - judged by its storage_path), and its Qdrant vectors.
 
         Note: prior to Wave 5C this method did not clean up Qdrant
         vectors, leaving them orphaned after a delete (Qdrant is a
@@ -194,12 +205,15 @@ class DocumentService:
         if document is None:
             return False
 
-        local_storage.delete_file(document.storage_path)
+        # Best-effort, like the Qdrant cleanup below: the row is already
+        # deleted, so a storage failure is logged (never raised). A missing
+        # object counts as already deleted.
+        await delete_stored_file(document.storage_path)
 
         try:
             await self.vector_store.delete_document_chunks(document.id)
         except QdrantIntegrationError:
-            # The PostgreSQL row and local file are already gone by this
+            # The PostgreSQL row and stored file are already gone by this
             # point, so there's nothing left to roll back - a transient
             # Qdrant failure here shouldn't turn an otherwise-successful
             # delete into an error for the caller (and, for GitHub sync,
@@ -212,7 +226,7 @@ class DocumentService:
         self, document_id: UUID, user_id: UUID, *, extra_chunk_metadata: Optional[dict] = None
     ) -> Optional[DocumentResponse]:
         """Re-run ingestion for a document: parse, chunk, persist Chunk rows,
-        embed the new chunks with BGE-M3, and replace the document's vectors
+        embed the new chunks, and replace the document's vectors
         in Qdrant.
 
         `extra_chunk_metadata`, if given, is merged into every chunk's
@@ -241,7 +255,13 @@ class DocumentService:
         await self.session.flush()
 
         try:
-            ingested_chunks = extract_chunks(document.storage_path, document.file_type)
+            # Read the original bytes from whichever provider owns this
+            # document (legacy local path or "r2://" reference), so
+            # reindexing never needs a persistent local file.
+            content = await get_storage_for_path(document.storage_path).read(
+                document.storage_path
+            )
+            ingested_chunks = extract_chunks_from_bytes(content, document.file_type)
 
             chunk_rows = [
                 Chunk(
