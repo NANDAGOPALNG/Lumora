@@ -1,0 +1,72 @@
+# Render Blueprint for the Lumora backend (FastAPI), native Python runtime,
+# Free plan. Create it from the dashboard: New > Blueprint > pick this repo.
+#
+# Nothing here contains a secret. Variables marked `sync: false` are asked for
+# once, in the dashboard, when the Blueprint is first created; the rest of the
+# configuration lives in this file.
+#
+# Database migrations are deliberately NOT part of the build or start command.
+# Run them once, by hand, from your own machine (see the deployment notes).
+services:
+  - type: web
+    name: lumora-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    branch: free_deployment
+    # Pushes do not deploy on their own; deploy manually from the dashboard.
+    autoDeployTrigger: off
+
+    # Render adds uv automatically because backend/uv.lock exists.
+    # --locked fails the build if uv.lock and pyproject.toml disagree;
+    # --no-dev leaves out pytest/ruff/black.
+    buildCommand: uv sync --locked --no-dev
+    # --no-sync: never resolve or install anything at start-up.
+    # $PORT is assigned by Render; bind to all interfaces.
+    startCommand: uv run --no-sync uvicorn main:app --host 0.0.0.0 --port $PORT
+    # Cheap and database-free, so a sleeping Neon database cannot fail it.
+    healthCheckPath: /health
+
+    envVars:
+      # A fully qualified version is required here (".python-version" accepts "3.12").
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: ENVIRONMENT
+        value: production
+      - key: DOCUMENT_STORAGE_BACKEND
+        value: r2
+
+      # Generated once by Render (random 256-bit value, base64). Changing it
+      # later signs every user out.
+      - key: SECRET_KEY
+        generateValue: true
+
+      - key: DATABASE_URL        # Neon connection string
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      # Exact origin of the Vercel site, e.g. https://lumora.vercel.app
+      # (no path, no trailing slash). Comma-separate to allow several.
+      - key: CORS_ORIGINS
+        sync: false
+
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+
+      - key: JINA_API_KEY
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      # The Gemini model your key can use (the code default is gemini-3.6-flash).
+      - key: GEMINI_MODEL_NAME
+        sync: false

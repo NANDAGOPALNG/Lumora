@@ -334,8 +334,8 @@ def test_production_settings_fail_fast(monkeypatch):
     with pytest.raises(ValueError, match="SECRET_KEY"):
         Settings.get_instance()
 
-    monkeypatch.setenv("SECRET_KEY", "s" * 40)
-    assert Settings.get_instance().is_production()
+    # The remaining production requirements (provider keys, R2, explicit
+    # CORS) are covered in tests/test_production_settings.py.
 
 def test_async_engine_is_created_once_and_reused(monkeypatch, tmp_path):
     import asyncio
