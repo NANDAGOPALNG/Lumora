@@ -5,8 +5,8 @@ Workflow B: conversation lifecycle and ownership.
 
 These drive the real FastAPI routes, services, repositories, chunker,
 retrieval fusion, context builder, and prompt builder. Only the
-external systems are replaced: the embedding model, Qdrant, the
-cross-encoder reranker model, Gemini, and PostgreSQL full-text search
+external systems are replaced: the embedding API, Qdrant, the
+reranker API, Gemini, and PostgreSQL full-text search
 (which SQLite can't run - the real KeywordRetriever is exercised
 separately in tests/test_wave7_postgres.py when a Postgres URL is
 provided).

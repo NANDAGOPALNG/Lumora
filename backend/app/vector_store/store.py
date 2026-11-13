@@ -192,6 +192,11 @@ class QdrantVectorStore:
     @staticmethod
     def _build_payload(chunk: QdrantChunkPoint) -> Dict[str, Any]:
         return {
+            # Which embedding model produced this vector. Models with the
+            # same dimension and distance can't be told apart by the
+            # collection's configuration, so this marker (read by
+            # scripts/qdrant_admin.py) lets an operator see what is stored.
+            "embedding_model": Settings.get_instance().embedding_model_name,
             "chunk_id": str(chunk.chunk_id),
             "document_id": str(chunk.document_id),
             "workspace_id": str(chunk.workspace_id),

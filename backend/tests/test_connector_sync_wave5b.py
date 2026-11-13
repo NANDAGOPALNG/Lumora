@@ -21,7 +21,7 @@ expensive/external pieces are faked:
   for the connector-level equivalent) - no real token or network call.
 - Embeddings: `app.services.document_service.embed_texts` is
   monkeypatched to return fixed-size fake vectors instantly, instead
-  of loading the real BGE-M3 model.
+  of calling the real embedding API.
 - Qdrant: a FakeVectorStore stands in for QdrantVectorStore - no real
   Qdrant connection is made or required.
 

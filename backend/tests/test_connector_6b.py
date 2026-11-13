@@ -50,7 +50,7 @@ from app.services.document_service import DocumentService
 
 
 async def _fake_embed_texts(texts, task="retrieval.passage", batch_size=None):
-    """Stands in for the real BAAI/bge-m3 embedding model, which these
+    """Stands in for the real (remote Jina) embedding call, which these
     tests never load (no network/model cache access is assumed) -
     mirrors tests/test_connector_sync_wave5b.py's identical fake.
     """

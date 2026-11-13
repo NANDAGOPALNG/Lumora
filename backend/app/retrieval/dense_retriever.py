@@ -122,7 +122,7 @@ class DenseRetriever:
 
         Returns [] when there are no matching points - this is not an
         error. Raises RetrievalValidationError for invalid input,
-        EmbeddingError if BGE-M3 embedding generation fails, and
+        EmbeddingError if Jina embedding generation fails, and
         QdrantIntegrationError if the Qdrant search itself fails, so a
         genuine failure is always distinguishable from an empty result.
 
