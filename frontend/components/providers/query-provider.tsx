@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { MutationCache, QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { ApiError, NETWORK_ERROR } from "@/lib/api/client";
+import { DASHBOARD_KEY_ROOT } from "@/hooks/use-dashboard";
 
 /** Retry once for transient failures only; never for 4xx (401, 404, 422). */
 function shouldRetry(failureCount: number, error: Error): boolean {
@@ -24,11 +25,17 @@ function ClearCacheOnSignOut() {
 }
 
 export function createAppQueryClient(): QueryClient {
-  return new QueryClient({
+  const client: QueryClient = new QueryClient({
+    // Any successful change (upload, delete, workspace, sync, chat...) can alter the dashboard
+    // counts or activity, so mark them stale; they refetch when the dashboard is next shown.
+    mutationCache: new MutationCache({
+      onSuccess: () => void client.invalidateQueries({ queryKey: [DASHBOARD_KEY_ROOT] }),
+    }),
     defaultOptions: {
       queries: { staleTime: 30_000, retry: shouldRetry, retryDelay: 800 },
     },
   });
+  return client;
 }
 
 export function QueryProvider({ children }: { children: React.ReactNode }) {

@@ -172,3 +172,35 @@ export interface GitHubSyncResponse {
   /** Always "completed" today: the backend returns a finished summary, not live progress. */
   status: string;
 }
+
+// ---------------------------------------------------------------------------
+// Dashboard (GET /api/v1/dashboard/summary)
+// ---------------------------------------------------------------------------
+
+export type DashboardActivityType =
+  | "document_uploaded"
+  | "connector_synced"
+  | "conversation_created";
+
+export interface DashboardStats {
+  workspaces: number;
+  documents: number;
+  indexed_chunks: number;
+  conversations: number;
+}
+
+export interface DashboardActivity {
+  id: string;
+  type: DashboardActivityType;
+  title: string;
+  description: string;
+  created_at: IsoDateTime;
+  workspace_id: Uuid | null;
+  /** App-relative path (e.g. "/integrations"), or null when there is nowhere to go. */
+  link: string | null;
+}
+
+export interface DashboardSummaryResponse {
+  stats: DashboardStats;
+  recent_activity: DashboardActivity[];
+}
