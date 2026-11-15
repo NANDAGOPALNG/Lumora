@@ -28,3 +28,20 @@ def clean_text(text: str) -> str:
     normalized = re.sub(r"[ \t]{2,}", " ", normalized)
 
     return normalized.strip()
+
+
+def clean_code(text: str) -> str:
+    """Normalize source code without damaging it.
+
+    Unlike `clean_text`, horizontal whitespace inside a line is never
+    collapsed (indentation is syntax in Python/YAML and aids readability
+    everywhere else). Only line endings, trailing whitespace, runs of
+    blank lines and leading/trailing blank lines are normalized.
+    """
+    if not text:
+        return ""
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = "\n".join(line.rstrip() for line in normalized.split("\n"))
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized.strip("\n")

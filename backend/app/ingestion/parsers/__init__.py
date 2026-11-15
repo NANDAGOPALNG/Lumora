@@ -5,7 +5,8 @@ a natural page concept) - no cleaning or chunking happens here. See
 `app.ingestion.cleaner` and `app.ingestion.chunker` for those steps.
 """
 
-from app.ingestion.parsers import docx_parser, markdown_parser, pdf_parser, txt_parser
+from app.ingestion.file_types import CODE_FILE_TYPES
+from app.ingestion.parsers import code_parser, docx_parser, markdown_parser, pdf_parser, txt_parser
 from app.ingestion.parsers.types import ParsedDocument, ParsedPage, ParsingError
 
 _PARSERS = {
@@ -13,6 +14,8 @@ _PARSERS = {
     "docx": docx_parser.parse,
     "txt": txt_parser.parse,
     "md": markdown_parser.parse,
+    # Every source-code/config type shares one UTF-8 text parser.
+    **{file_type: code_parser.parse for file_type in CODE_FILE_TYPES},
 }
 
 # Same formats, parsing in-memory content instead of a filesystem path.
@@ -21,6 +24,7 @@ _BYTES_PARSERS = {
     "docx": docx_parser.parse_bytes,
     "txt": txt_parser.parse_bytes,
     "md": markdown_parser.parse_bytes,
+    **{file_type: code_parser.parse_bytes for file_type in CODE_FILE_TYPES},
 }
 
 

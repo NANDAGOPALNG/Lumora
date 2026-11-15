@@ -11,8 +11,9 @@ from typing import List, Optional
 
 from app.config.settings import Settings
 from app.ingestion import parsers
-from app.ingestion.chunker import chunk_text
-from app.ingestion.cleaner import clean_text
+from app.ingestion.chunker import chunk_code, chunk_text
+from app.ingestion.cleaner import clean_code, clean_text
+from app.ingestion.file_types import CODE_FILE_TYPES
 
 
 @dataclass
@@ -38,7 +39,7 @@ def extract_chunks(
             can't be read, or it contains no extractable text.
     """
     parsed = parsers.parse(file_path, file_type)
-    return _chunk_parsed(parsed, chunk_size, chunk_overlap)
+    return _chunk_parsed(parsed, chunk_size, chunk_overlap, file_type)
 
 
 def extract_chunks_from_bytes(
@@ -57,25 +58,29 @@ def extract_chunks_from_bytes(
             can't be read, or it contains no extractable text.
     """
     parsed = parsers.parse_bytes(content, file_type)
-    return _chunk_parsed(parsed, chunk_size, chunk_overlap)
+    return _chunk_parsed(parsed, chunk_size, chunk_overlap, file_type)
 
 
 def _chunk_parsed(
     parsed: parsers.ParsedDocument,
     chunk_size: Optional[int],
     chunk_overlap: Optional[int],
+    file_type: Optional[str] = None,
 ) -> List[IngestedChunk]:
     settings = Settings.get_instance()
     size = chunk_size if chunk_size is not None else settings.chunk_size
     overlap = chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
 
+    is_code = (file_type or "").lower() in CODE_FILE_TYPES
+
     chunks: List[IngestedChunk] = []
     index = 0
     for page in parsed.pages:
-        cleaned = clean_text(page.text)
+        cleaned = clean_code(page.text) if is_code else clean_text(page.text)
         if not cleaned.strip():
             continue
-        for piece in chunk_text(cleaned, size, overlap):
+        pieces = chunk_code(cleaned, size) if is_code else chunk_text(cleaned, size, overlap)
+        for piece in pieces:
             chunks.append(IngestedChunk(index=index, text=piece, page_number=page.page_number))
             index += 1
 

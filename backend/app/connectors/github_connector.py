@@ -42,29 +42,48 @@ from app.connectors.base import (
     ConnectorResourceNotFoundError,
 )
 
+from app.ingestion.file_types import (
+    ALLOWED_FILE_TYPES,
+    CODE_FILE_TYPES,
+    EXCLUDED_PATH_SEGMENTS,
+    extract_extension,
+    is_excluded_directory_path,
+    is_minified_or_generated,
+    is_secret_file,
+)
+
 GITHUB_API_BASE_URL = "https://api.github.com"
 _REQUEST_TIMEOUT_SECONDS = 10
 
-# Path segments that mark a file as internal/generated/vendored rather
-# than source content worth indexing. Checked in addition to (not
-# instead of) extension filtering - most build/dependency output is
-# already excluded by extension alone, but this catches e.g. a stray
-# vendored .md file inside node_modules/.
-_EXCLUDED_PATH_SEGMENTS = {
-    ".git", "node_modules", "vendor", "dist", "build", "target",
-    "__pycache__", ".venv", "venv", ".idea", ".vscode",
-}
+# Which paths are indexable (extension allowlist, excluded directories,
+# secret/credential files, minified/generated files) is defined once in
+# app.ingestion.file_types, shared with DocumentService so discovery and
+# ingestion can never disagree about what is supported.
+_EXCLUDED_PATH_SEGMENTS = EXCLUDED_PATH_SEGMENTS
 
 
 def _is_excluded_path(path: str) -> bool:
-    return bool(set(path.split("/")) & _EXCLUDED_PATH_SEGMENTS)
+    """True if the path must never be indexed regardless of extension."""
+    return (
+        is_excluded_directory_path(path)
+        or is_secret_file(path)
+        or is_minified_or_generated(path)
+    )
 
 
 def _extract_extension(path: str) -> Optional[str]:
-    basename = path.rsplit("/", 1)[-1]
-    if "." not in basename:
-        return None
-    return basename.rsplit(".", 1)[-1].lower()
+    return extract_extension(path)
+
+
+def _looks_like_text(content: bytes) -> bool:
+    """False for empty, NUL-containing (binary) or non-UTF-8 content."""
+    if not content.strip() or b"\x00" in content:
+        return False
+    try:
+        content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return False
+    return True
 
 
 @dataclass
@@ -202,10 +221,11 @@ class GitHubConnector(BaseConnector):
         repository's default branch, already filtered.
 
         Filters out (without fetching any file content):
-        - anything not of a Lumora-ingestible extension (reused from
-          DocumentService.ALLOWED_FILE_TYPES)
+        - anything not of a Lumora-ingestible extension (shared with
+          DocumentService via app.ingestion.file_types)
         - common non-source/generated directories (see
-          _EXCLUDED_PATH_SEGMENTS)
+          file_types.EXCLUDED_PATH_SEGMENTS), environment/private-key/
+          credential files, and minified or lock/generated files
         - files over `max_file_size_bytes`, if one was given, using
           the tree's reported blob size
 
@@ -232,16 +252,6 @@ class GitHubConnector(BaseConnector):
 
         tree_data = tree_response.json()
         discovered: List[Dict[str, Any]] = []
-
-        # Imported here rather than at module level: app.services.document_service
-        # sits in a package whose __init__ imports ConnectorService, which
-        # imports this module - a top-level import here would be a circular
-        # import. Deferring it to call time (after all modules have finished
-        # initializing) avoids that without restructuring either module, the
-        # same pattern already used elsewhere in this codebase (see
-        # app/embeddings/engine.py, app/retrieval/reranker.py) for
-        # heavy/cyclical imports.
-        from app.services.document_service import ALLOWED_FILE_TYPES
 
         for entry in tree_data.get("tree", []):
             if entry.get("type") != "blob":
@@ -328,9 +338,24 @@ class GitHubConnector(BaseConnector):
         fetch_failures = 0
         for entry in discovered:
             try:
-                files.append(await self.fetch_file(entry["path"], entry["sha"]))
+                fetched = await self.fetch_file(entry["path"], entry["sha"])
             except ConnectorError:
                 fetch_failures += 1
+                continue
+            # The tree's reported size is advisory; enforce the limit on
+            # the bytes actually received too. Source/config files must be
+            # real UTF-8 text - binary or empty content is never indexed
+            # (pdf/docx are binary by nature and are not text-checked).
+            if (
+                self._max_file_size_bytes is not None
+                and len(fetched.content) > self._max_file_size_bytes
+            ) or (
+                _extract_extension(fetched.path) in CODE_FILE_TYPES
+                and not _looks_like_text(fetched.content)
+            ):
+                fetch_failures += 1
+                continue
+            files.append(fetched)
 
         return GitHubFetchResult(
             files=files, discovered_count=len(discovered), fetch_failures=fetch_failures

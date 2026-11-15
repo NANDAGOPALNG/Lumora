@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from app.config.settings import Settings
 from app.embeddings import embed_texts
 from app.ingestion import extract_chunks_from_bytes
+from app.ingestion.file_types import ALLOWED_FILE_TYPES, CODE_FILE_TYPES, DOCUMENT_FILE_TYPES
 from app.models.chunk import Chunk
 from app.models.document import Document, DocumentStatus
 from app.repositories.chunk_repository import ChunkRepository
@@ -28,7 +29,10 @@ from app.storage.factory import (
 )
 from app.vector_store import QdrantChunkPoint, QdrantIntegrationError, QdrantVectorStore
 
-ALLOWED_FILE_TYPES = {"pdf", "docx", "txt", "md"}
+# ALLOWED_FILE_TYPES (everything the ingestion pipeline can parse) lives in
+# app.ingestion.file_types so the GitHub connector's discovery filter and
+# this service can never drift apart. Manual uploads keep the original,
+# narrower DOCUMENT_FILE_TYPES set - see `upload_document(allowed_file_types=...)`.
 
 # Content-types practically observed for each supported extension. Some
 # clients (curl, some browsers) send a generic or missing content-type for
@@ -39,6 +43,17 @@ _ALLOWED_CONTENT_TYPES = {
     "docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
     "txt": {"text/plain"},
     "md": {"text/markdown", "text/x-markdown", "text/plain"},
+}
+
+# Source/config files arrive with many content-types depending on client
+# and OS (text/x-python, application/json, text/javascript, ...), so for
+# them any text-like type is accepted; the parser itself rejects binary
+# or non-UTF-8 content.
+_CODE_CONTENT_TYPES = {
+    "application/json", "application/xml", "application/javascript",
+    "application/x-javascript", "application/typescript", "application/x-yaml",
+    "application/yaml", "application/toml", "application/sql",
+    "application/x-sh", "application/x-shellscript", "application/x-httpd-php",
 }
 
 _CONTENT_TYPE_EXEMPTIONS = {"", "application/octet-stream"}
@@ -56,12 +71,12 @@ class IngestionFailedError(Exception):
     """Raised when document parsing/chunking or chunk persistence fails."""
 
 
-def _extract_file_type(filename: str) -> str:
+def _extract_file_type(filename: str, allowed_file_types=ALLOWED_FILE_TYPES) -> str:
     if not filename or "." not in filename:
         raise UnsupportedFileTypeError(f"File has no extension: {filename!r}")
 
     extension = filename.rsplit(".", 1)[-1].lower()
-    if extension not in ALLOWED_FILE_TYPES:
+    if extension not in allowed_file_types:
         raise UnsupportedFileTypeError(f"Unsupported file extension: .{extension}")
 
     return extension
@@ -70,6 +85,11 @@ def _extract_file_type(filename: str) -> str:
 def _validate_content_type(file_type: str, content_type: Optional[str]) -> None:
     normalized = (content_type or "").split(";")[0].strip().lower()
     if normalized in _CONTENT_TYPE_EXEMPTIONS:
+        return
+
+    if file_type in CODE_FILE_TYPES and (
+        normalized.startswith("text/") or normalized in _CODE_CONTENT_TYPES
+    ):
         return
 
     allowed = _ALLOWED_CONTENT_TYPES.get(file_type, set())
@@ -103,6 +123,7 @@ class DocumentService:
         content: bytes,
         connector_id: Optional[UUID] = None,
         source_id: Optional[str] = None,
+        allowed_file_types=ALLOWED_FILE_TYPES,
     ) -> Optional[DocumentResponse]:
         """
         Validate, store, and record an uploaded document.
@@ -119,6 +140,11 @@ class DocumentService:
         and connector types that use a different within-connector
         identity (GitHub's `filename`/path, Wave 5C) leave this None.
 
+        `allowed_file_types` limits which extensions are accepted. It
+        defaults to everything the ingestion pipeline can parse (what
+        connectors use); the manual-upload route passes
+        DOCUMENT_FILE_TYPES so user uploads behave exactly as before.
+
         Returns None if workspace_id doesn't exist or isn't owned by
         user_id (caller should respond 404 without disclosing which).
 
@@ -130,7 +156,7 @@ class DocumentService:
         if workspace is None:
             return None
 
-        file_type = _extract_file_type(filename)
+        file_type = _extract_file_type(filename, allowed_file_types)
         _validate_content_type(file_type, content_type)
 
         max_bytes = Settings.get_instance().max_document_size_bytes
