@@ -37,7 +37,7 @@ _SAMPLE_TREE = {
     "tree": [
         {"path": "README.md", "type": "blob", "sha": "sha-readme", "size": 120},
         {"path": "docs/guide.txt", "type": "blob", "sha": "sha-guide", "size": 300},
-        {"path": "src/app.py", "type": "blob", "sha": "sha-py", "size": 500},  # unsupported ext
+        {"path": "src/app.py", "type": "blob", "sha": "sha-py", "size": 500},  # source code (supported since Stage 6A)
         {"path": "assets/logo.png", "type": "blob", "sha": "sha-png", "size": 900},  # unsupported ext
         {"path": "huge.md", "type": "blob", "sha": "sha-huge", "size": 10_000_000},  # too big
         {"path": "node_modules/pkg/readme.md", "type": "blob", "sha": "sha-nm", "size": 50},  # excluded dir
@@ -80,9 +80,8 @@ def test_repository_file_discovery_and_filtering(monkeypatch):
     paths = asyncio.run(_run())
 
     # supported, correctly-sized, not in an excluded directory
-    assert paths == {"README.md", "docs/guide.txt"}
+    assert paths == {"README.md", "docs/guide.txt", "src/app.py"}
     # explicitly confirm each filtering rule excluded what it should
-    assert "src/app.py" not in paths           # unsupported extension
     assert "assets/logo.png" not in paths       # unsupported extension
     assert "huge.md" not in paths               # over max_file_size_bytes
     assert "node_modules/pkg/readme.md" not in paths  # excluded directory
@@ -119,6 +118,7 @@ def test_sync_discovers_and_fetches_only_supported_files(monkeypatch):
         blob_json_by_sha={
             "sha-readme": {"content": _b64("readme text"), "encoding": "base64"},
             "sha-guide": {"content": _b64("guide text"), "encoding": "base64"},
+            "sha-py": {"content": _b64("def main():\n    pass\n"), "encoding": "base64"},
         },
     )
 
@@ -130,10 +130,12 @@ def test_sync_discovers_and_fetches_only_supported_files(monkeypatch):
 
     result = asyncio.run(_run())
 
-    assert result.discovered_count == 2
+    assert result.discovered_count == 3
     assert result.fetch_failures == 0
-    assert {f.path for f in result.files} == {"README.md", "docs/guide.txt"}
-    assert {f.content for f in result.files} == {b"readme text", b"guide text"}
+    assert {f.path for f in result.files} == {"README.md", "docs/guide.txt", "src/app.py"}
+    assert {f.content for f in result.files} == {
+        b"readme text", b"guide text", b"def main():\n    pass\n"
+    }
 
 
 def test_authentication_failure(monkeypatch):
@@ -163,7 +165,10 @@ def test_sync_skips_individual_fetch_failures_without_aborting(monkeypatch):
     _mock_github(
         monkeypatch,
         blob_status=200,
-        blob_json_by_sha={"sha-readme": {"content": _b64("ok"), "encoding": "base64"}},
+        blob_json_by_sha={
+            "sha-readme": {"content": _b64("ok"), "encoding": "base64"},
+            "sha-py": {"content": _b64("x = 1\n"), "encoding": "base64"},
+        },
     )
 
     call_count = {"n": 0}
@@ -186,6 +191,6 @@ def test_sync_skips_individual_fetch_failures_without_aborting(monkeypatch):
     finally:
         github_connector_module.requests.get = real_get
 
-    assert result.discovered_count == 2
+    assert result.discovered_count == 3
     assert result.fetch_failures == 1
-    assert [f.path for f in result.files] == ["README.md"]
+    assert [f.path for f in result.files] == ["README.md", "src/app.py"]

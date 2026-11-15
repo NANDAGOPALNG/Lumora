@@ -98,3 +98,124 @@ def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> List[str]:
         chunks.append(current)
 
     return [c for c in chunks if c.strip()]
+
+
+# --- Source-code chunking -------------------------------------------------
+#
+# Used only for source/config file types (see pipeline._chunk_parsed);
+# prose chunking above is untouched.
+
+# A top-level (column 0) line that starts a new declaration.
+_DECLARATION_RE = re.compile(
+    r"^(?:"
+    r"(?:async\s+)?def\s|class\s|"                       # Python
+    r"(?:export\s+)?(?:default\s+)?(?:async\s+)?function\b|"   # JS/TS
+    r"export\s|"                                          # JS/TS exports
+    r"(?:abstract\s+)?(?:interface|enum|namespace|type)\s|"    # TS
+    r"(?:const|let|var)\s+\w+\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\(|function\b|\w+\s*=>)|"
+    r"(?:create|alter|drop)\s+\w+|"                       # SQL (case-insensitive below)
+    r"(?:function\s+)?\w+\s*\(\)\s*\{|"                   # shell functions
+    r"(?:@\w)"                                            # decorators
+    r")",
+    re.IGNORECASE,
+)
+# Lines that belong to the declaration that follows them.
+_ATTACHED_PREFIXES = ("@", "#", "//", "/*", "*", "--")
+
+
+def _declaration_starts(lines: List[str]) -> List[int]:
+    """Indexes of lines where a new top-level declaration segment begins,
+    including any decorator/comment lines directly above it."""
+    starts: List[int] = []
+    for i, line in enumerate(lines):
+        if not line or line[0] in " \t" or not _DECLARATION_RE.match(line):
+            continue
+        # A decorator directly followed by its def/class: only the
+        # decorator line (the first of the run) starts the segment.
+        if i > 0 and lines[i - 1].startswith("@"):
+            continue
+        j = i
+        while j > 0 and lines[j - 1].strip() and lines[j - 1].lstrip().startswith(_ATTACHED_PREFIXES) and lines[j - 1][0] not in " \t":
+            j -= 1
+        if starts and j <= starts[-1]:
+            continue
+        starts.append(j)
+    return starts
+
+
+def _hard_split(text: str, max_size: int) -> List[str]:
+    return [text[i : i + max_size] for i in range(0, len(text), max_size)]
+
+
+def _split_oversized(segment: str, max_size: int) -> List[str]:
+    """Split a segment longer than max_size at blank lines, then at line
+    boundaries; a single over-long line is cut at max_size characters."""
+    pieces: List[str] = []
+    current = ""
+
+    def flush() -> None:
+        nonlocal current
+        if current.strip():
+            pieces.append(current)
+        current = ""
+
+    for line in segment.split("\n"):
+        if len(line) > max_size:
+            flush()
+            pieces.extend(p for p in _hard_split(line, max_size) if p.strip())
+            continue
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > max_size:
+            flush()
+            current = line
+        else:
+            current = candidate
+    flush()
+    return pieces
+
+
+def chunk_code(text: str, chunk_size: int) -> List[str]:
+    """Split source code into chunks of at most chunk_size characters,
+    preferring to break between top-level functions/classes so a
+    declaration is not cut in half unless it alone exceeds chunk_size.
+
+    Indentation and line structure are preserved. No overlap is added:
+    chunks begin at declaration boundaries, so repeating trailing text
+    would only duplicate code.
+    """
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    if not text.strip():
+        return []
+
+    lines = text.split("\n")
+    starts = _declaration_starts(lines)
+    bounds = ([0] if not starts or starts[0] != 0 else []) + starts + [len(lines)]
+
+    segments: List[str] = []
+    for begin, end in zip(bounds, bounds[1:]):
+        segment = "\n".join(lines[begin:end]).strip("\n")
+        if segment.strip():
+            segments.append(segment)
+
+    units: List[str] = []
+    for segment in segments:
+        if len(segment) <= chunk_size:
+            units.append(segment)
+        else:
+            units.extend(_split_oversized(segment, chunk_size))
+
+    chunks: List[str] = []
+    current = ""
+    for unit in units:
+        candidate = f"{current}\n\n{unit}" if current else unit
+        if len(candidate) <= chunk_size:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            current = unit
+    if current.strip():
+        chunks.append(current)
+
+    return [c for c in chunks if c.strip()]

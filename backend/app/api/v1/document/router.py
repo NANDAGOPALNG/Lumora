@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.config.settings import Settings
+from app.ingestion.file_types import DOCUMENT_FILE_TYPES
 from app.database.session import get_db
 from app.models.user import User
 from app.repositories.chunk_repository import ChunkRepository
@@ -90,6 +91,7 @@ async def upload_document(
             filename=file.filename or "",
             content_type=file.content_type,
             content=content,
+            allowed_file_types=DOCUMENT_FILE_TYPES,
         )
     except UnsupportedFileTypeError as exc:
         raise HTTPException(
